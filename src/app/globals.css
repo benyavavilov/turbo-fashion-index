@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+html,
+body {
+  min-height: 100%;
+  background: #000000;
+  color: #ededed;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
