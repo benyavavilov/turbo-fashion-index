@@ -1,6 +1,8 @@
 import BrandSearch from "@/app/components/BrandSearch";
 import { fetchBrandsFromDatabase } from "@/app/lib/search-config";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const items = await fetchBrandsFromDatabase();
 

@@ -71,7 +71,8 @@ export async function fetchBrandsFromDatabase(): Promise<BrandRecord[]> {
       name: String(row.name),
       slug: String(row.slug),
     }));
-  } catch {
+  } catch (error) {
+    console.error("Vercel DB Error:", error);
     return [];
   }
 }
