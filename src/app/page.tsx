@@ -1,21 +1,8 @@
-"use client";
-
 import BrandSearch from "@/app/components/BrandSearch";
-import {
-  fetchBrandsFromDatabase,
-  type BrandRecord,
-} from "@/app/lib/search-config";
-import { useEffect, useState } from "react";
+import { fetchBrandsFromDatabase } from "@/app/lib/search-config";
 
-export default function Home() {
-  const [items, setItems] = useState<BrandRecord[]>([]);
-
-  useEffect(() => {
-    fetchBrandsFromDatabase().then((data) => {
-      console.log("Fetched brands from DB:", data);
-      setItems(data);
-    });
-  }, []);
+export default async function Home() {
+  const items = await fetchBrandsFromDatabase();
 
   return (
     <div className="min-h-screen bg-black text-zinc-100">

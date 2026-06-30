@@ -42,20 +42,14 @@ export function filterByWordBoundaryPrefix(
 }
 
 export async function fetchBrandsFromDatabase(): Promise<BrandRecord[]> {
-  const config = getSupabasePublicEnv();
-  console.log("Supabase URL:", config?.url);
-
   try {
+    const config = getSupabasePublicEnv();
     if (!config) {
-      console.error(
-        "Supabase fetch error: NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is missing or empty.",
-      );
       return [];
     }
 
     const client = getSupabase();
     if (!client) {
-      console.error("Supabase fetch error: Client failed to initialize.");
       return [];
     }
 
@@ -77,8 +71,7 @@ export async function fetchBrandsFromDatabase(): Promise<BrandRecord[]> {
       name: String(row.name),
       slug: String(row.slug),
     }));
-  } catch (error) {
-    console.error("Supabase fetch error:", error);
+  } catch {
     return [];
   }
 }
