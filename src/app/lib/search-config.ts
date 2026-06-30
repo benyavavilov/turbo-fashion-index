@@ -6,7 +6,7 @@ export interface BrandRecord {
   slug: string;
 }
 
-const BRANDS_TABLE = "brands";
+const BRANDS_TABLE = "tracked_brands";
 
 export function normalizeString(value: string): string {
   return value.trim().toLowerCase();
