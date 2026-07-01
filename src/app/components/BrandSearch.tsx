@@ -31,7 +31,7 @@ export default function BrandSearch({ items }: BrandSearchProps) {
       setQuery(record.name);
       setIsOpen(false);
       setActiveIndex(-1);
-      router.push(`/brand/${record.slug || brandToSlug(record.name)}`);
+      router.push(`/brands/${record.slug || brandToSlug(record.name)}`);
     },
     [router],
   );
