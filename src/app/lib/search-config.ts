@@ -5,6 +5,7 @@ export interface BrandRecord {
   name: string;
   slug: string;
   ai_trend_score: number;
+  logo_url: string | null;
 }
 
 export interface BrandDetail {
@@ -14,6 +15,11 @@ export interface BrandDetail {
   summary: string;
   ai_trend_score: number;
   homepage: string | null;
+  logo_url: string | null;
+}
+
+function toOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 export interface BrandNewsItem {
@@ -107,7 +113,7 @@ export async function fetchBrandsFromDatabase(): Promise<BrandRecord[]> {
 
     const { data, error } = await client
       .from(BRANDS_TABLE)
-      .select("id, name, slug, ai_trend_score")
+      .select("*")
       .order("ai_trend_score", { ascending: false })
       .order("name", { ascending: true });
 
@@ -124,6 +130,7 @@ export async function fetchBrandsFromDatabase(): Promise<BrandRecord[]> {
       name: String(row.name),
       slug: String(row.slug),
       ai_trend_score: toScore(row.ai_trend_score),
+      logo_url: toOptionalString(row.logo_url),
     }));
   } catch (error) {
     console.error("Vercel DB Error:", error);
@@ -147,7 +154,7 @@ export async function fetchBrandBySlug(
 
     const { data, error } = await client
       .from(BRANDS_TABLE)
-      .select("id, name, slug, summary, ai_trend_score, homepage")
+      .select("*")
       .eq("slug", slug)
       .maybeSingle();
 
@@ -166,6 +173,7 @@ export async function fetchBrandBySlug(
       summary: typeof data.summary === "string" ? data.summary : "",
       ai_trend_score: toScore(data.ai_trend_score),
       homepage: typeof data.homepage === "string" ? data.homepage : null,
+      logo_url: toOptionalString(data.logo_url),
     };
   } catch (error) {
     console.error("Vercel DB Error:", error);

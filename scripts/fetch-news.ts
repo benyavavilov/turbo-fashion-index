@@ -27,7 +27,7 @@ const MAX_ITEMS_PER_BRAND = 20;
 const VALID_CATEGORIES = [
   "New Product Drops & Collections",
   "Restock Alerts",
-  "Price Drops & Sales",
+  "Deals & Promos",
   "General",
 ] as const;
 
@@ -237,9 +237,13 @@ function buildPrompt(brandName: string, items: NormalizedItem[]): string {
   return [
     "You are an expert fashion e-commerce editor.",
     `Review these recent catalog/store updates for ${brandName}.`,
+    "IGNORE administrative or backend store products entirely — do NOT create",
+    "notifications for items such as 'Package Protection', 'Shipping', 'Navidium',",
+    "shipping insurance, tips, donations, gift cards, or any similar non-merchandise",
+    "checkout add-ons. Only surface genuine product, collection, or promotional news.",
     "Deduplicate them if multiple items are part of the exact same collection drop or event.",
     "Return a JSON array of unique notification events. Each object must strictly contain:",
-    "* 'category': string, must be exactly 'New Product Drops & Collections', 'Restock Alerts', 'Price Drops & Sales', or 'General'.",
+    "* 'category': string, must be exactly 'New Product Drops & Collections', 'Restock Alerts', 'Deals & Promos', or 'General'.",
     "* 'notification_banner': string, a sharp, 1-sentence alert detailing the event for a mobile push style notification.",
     "* 'url': string, the direct link to the product or page.",
     "* 'image_url': string, the best image link extracted from the feed item data.",
@@ -426,13 +430,22 @@ export async function run(): Promise<void> {
         continue;
       }
 
+      // Map the image extracted from each feed item's HTML by URL, so we save
+      // the real feed image (falling back to whatever the model returned).
+      const imageByUrl = new Map<string, string>();
+      for (const item of relevant) {
+        if (item.image_url) {
+          imageByUrl.set(item.url, item.image_url);
+        }
+      }
+
       const events = await synthesizeEvents(ai, brand.name, relevant);
       const rows: NewsRow[] = events.map((event) => ({
         brand_slug: brand.slug,
         category: event.category,
         notification_banner: event.notification_banner,
         url: event.url,
-        image_url: event.image_url,
+        image_url: imageByUrl.get(event.url) || event.image_url || "",
         title: event.title,
         published_at: event.published_at,
         source: event.source || brand.name || "Official Store Feed",

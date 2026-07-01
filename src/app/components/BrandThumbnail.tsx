@@ -5,6 +5,8 @@ import { useState } from "react";
 export interface BrandThumbnailProps {
   imageUrl: string;
   brandSlug: string;
+  /** Optional brand logo used as a fallback when the item image is missing/broken. */
+  logoUrl?: string | null;
   /** Tailwind sizing/spacing classes (e.g. "h-14 w-14"). */
   className?: string;
 }
@@ -12,24 +14,41 @@ export interface BrandThumbnailProps {
 export default function BrandThumbnail({
   imageUrl,
   brandSlug,
+  logoUrl,
   className = "",
 }: BrandThumbnailProps) {
-  const [failed, setFailed] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
 
   const base = `shrink-0 overflow-hidden rounded-lg ${className}`;
 
-  if (imageUrl && !failed) {
+  // Tier 1: the item's own image.
+  if (imageUrl && !imageFailed) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={imageUrl}
         alt=""
-        onError={() => setFailed(true)}
+        onError={() => setImageFailed(true)}
         className={`${base} object-cover`}
       />
     );
   }
 
+  // Tier 2: the brand's logo.
+  if (logoUrl && !logoFailed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={logoUrl}
+        alt=""
+        onError={() => setLogoFailed(true)}
+        className={`${base} bg-zinc-900 object-contain p-2`}
+      />
+    );
+  }
+
+  // Tier 3: a stylized initial derived from the brand slug.
   const letter = (brandSlug.trim()[0] ?? "?").toUpperCase();
 
   return (

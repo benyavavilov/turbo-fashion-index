@@ -40,9 +40,9 @@ export const CATEGORY_DEFS: readonly CategoryDef[] = [
   },
   {
     key: "sales",
-    category: "Price Drops & Sales",
-    label: "Price Drops & Sales",
-    shortLabel: "Sales",
+    category: "Deals & Promos",
+    label: "Deals & Promos",
+    shortLabel: "Deals & Promos",
   },
 ] as const;
 

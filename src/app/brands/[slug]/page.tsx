@@ -76,7 +76,7 @@ export default async function BrandPage({ params }: BrandPageProps) {
             {news.length > 0 ? (
               <ul className="mt-5 space-y-3">
                 {news.map((item) => (
-                  <NewsRow key={item.id} item={item} />
+                  <NewsRow key={item.id} item={item} logoUrl={brand.logo_url} />
                 ))}
               </ul>
             ) : (
@@ -106,7 +106,13 @@ export default async function BrandPage({ params }: BrandPageProps) {
   );
 }
 
-function NewsRow({ item }: { item: BrandNewsItem }) {
+function NewsRow({
+  item,
+  logoUrl,
+}: {
+  item: BrandNewsItem;
+  logoUrl: string | null;
+}) {
   return (
     <li>
       <a
@@ -118,6 +124,7 @@ function NewsRow({ item }: { item: BrandNewsItem }) {
         <BrandThumbnail
           imageUrl={item.image_url}
           brandSlug={item.brand_slug}
+          logoUrl={logoUrl}
           className="h-14 w-14"
         />
         <div className="min-w-0 flex-1">

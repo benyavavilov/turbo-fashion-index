@@ -46,6 +46,14 @@ export default function YourFeed({ brands }: YourFeedProps) {
     return map;
   }, [brands]);
 
+  const logoBySlug = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const brand of brands) {
+      map.set(brand.slug, brand.logo_url);
+    }
+    return map;
+  }, [brands]);
+
   const subscribedSlugs = useMemo(
     () =>
       Object.entries(subscriptions)
@@ -205,6 +213,7 @@ export default function YourFeed({ brands }: YourFeedProps) {
                     key={item.id}
                     item={item}
                     brandName={nameBySlug.get(item.brand_slug) ?? item.brand_slug}
+                    logoUrl={logoBySlug.get(item.brand_slug) ?? null}
                   />
                 ))}
               </ul>
@@ -219,9 +228,11 @@ export default function YourFeed({ brands }: YourFeedProps) {
 function FeedItem({
   item,
   brandName,
+  logoUrl,
 }: {
   item: BrandNewsItem;
   brandName: string;
+  logoUrl: string | null;
 }) {
   return (
     <li>
@@ -234,6 +245,7 @@ function FeedItem({
         <BrandThumbnail
           imageUrl={item.image_url}
           brandSlug={item.brand_slug}
+          logoUrl={logoUrl}
           className="h-16 w-16"
         />
         <div className="min-w-0 flex-1">
