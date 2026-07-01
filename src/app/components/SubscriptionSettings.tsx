@@ -1,21 +1,57 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import ToggleSwitch from "@/app/components/ToggleSwitch";
+import {
+  CATEGORY_DEFS,
+  defaultSubscription,
+  readSubscriptions,
+  writeSubscriptions,
+  type BrandSubscription,
+  type PreferenceKey,
+} from "@/app/lib/subscriptions";
 
-const NOTIFICATION_OPTIONS = [
-  "New Product Drops & Collections",
-  "Restock Alerts",
-  "Price Drops & Sales",
-] as const;
+export interface SubscriptionSettingsProps {
+  slug: string;
+}
 
-type NotificationState = Record<string, boolean>;
+export default function SubscriptionSettings({ slug }: SubscriptionSettingsProps) {
+  const [subscription, setSubscription] = useState<BrandSubscription>(
+    defaultSubscription,
+  );
+  const [hydrated, setHydrated] = useState(false);
 
-export default function SubscriptionSettings() {
-  const [subscribed, setSubscribed] = useState(false);
-  const [notifications, setNotifications] = useState<NotificationState>({});
+  // Read from localStorage only after mount to avoid hydration mismatches.
+  useEffect(() => {
+    const stored = readSubscriptions()[slug];
+    if (stored) {
+      setSubscription(stored);
+    }
+    setHydrated(true);
+  }, [slug]);
 
-  const toggleNotification = (option: string) => {
-    setNotifications((prev) => ({ ...prev, [option]: !prev[option] }));
+  const persist = (next: BrandSubscription) => {
+    setSubscription(next);
+    const all = readSubscriptions();
+    all[slug] = next;
+    writeSubscriptions(all);
+  };
+
+  const toggleSubscribed = () => {
+    persist({ ...subscription, isSubscribed: !subscription.isSubscribed });
+  };
+
+  const togglePreference = (key: PreferenceKey) => {
+    if (!subscription.isSubscribed) {
+      return;
+    }
+    persist({
+      ...subscription,
+      preferences: {
+        ...subscription.preferences,
+        [key]: !subscription.preferences[key],
+      },
+    });
   };
 
   return (
@@ -34,32 +70,34 @@ export default function SubscriptionSettings() {
           </p>
         </div>
         <ToggleSwitch
-          checked={subscribed}
-          onChange={() => setSubscribed((value) => !value)}
+          checked={subscription.isSubscribed}
+          onChange={toggleSubscribed}
           label="Subscribe to Brand Updates"
+          disabled={!hydrated}
         />
       </div>
 
       <div
         className={`grid transition-all duration-300 ease-out ${
-          subscribed
+          subscription.isSubscribed
             ? "mt-5 grid-rows-[1fr] opacity-100"
             : "grid-rows-[0fr] opacity-0"
         }`}
       >
         <div className="overflow-hidden">
           <ul className="space-y-1 border-t border-zinc-800/80 pt-4">
-            {NOTIFICATION_OPTIONS.map((option) => (
+            {CATEGORY_DEFS.map((def) => (
               <li
-                key={option}
+                key={def.key}
                 className="flex items-center justify-between gap-4 rounded-lg px-3 py-2.5 hover:bg-zinc-900/60"
               >
-                <span className="text-sm text-zinc-300">{option}</span>
+                <span className="text-sm text-zinc-300">{def.label}</span>
                 <ToggleSwitch
-                  checked={Boolean(notifications[option])}
-                  onChange={() => toggleNotification(option)}
-                  label={option}
+                  checked={subscription.preferences[def.key]}
+                  onChange={() => togglePreference(def.key)}
+                  label={def.label}
                   size="sm"
+                  disabled={!subscription.isSubscribed}
                 />
               </li>
             ))}
@@ -67,37 +105,5 @@ export default function SubscriptionSettings() {
         </div>
       </div>
     </div>
-  );
-}
-
-interface ToggleSwitchProps {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  size?: "sm" | "md";
-}
-
-function ToggleSwitch({ checked, onChange, label, size = "md" }: ToggleSwitchProps) {
-  const track = size === "sm" ? "h-5 w-9" : "h-6 w-11";
-  const knob = size === "sm" ? "h-3.5 w-3.5" : "h-4.5 w-4.5";
-  const translate = size === "sm" ? "translate-x-4" : "translate-x-5";
-
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={onChange}
-      className={`relative inline-flex ${track} shrink-0 items-center rounded-full transition-colors ${
-        checked ? "bg-zinc-100" : "bg-zinc-700"
-      }`}
-    >
-      <span
-        className={`inline-block ${knob} transform rounded-full bg-black shadow transition-transform ${
-          checked ? translate : "translate-x-1"
-        }`}
-      />
-    </button>
   );
 }

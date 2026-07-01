@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import SubscriptionSettings from "@/app/components/SubscriptionSettings";
-import { fetchBrandBySlug } from "@/app/lib/search-config";
+import {
+  fetchBrandBySlug,
+  fetchBrandNewsBySlug,
+  type BrandNewsItem,
+} from "@/app/lib/search-config";
+import { formatRelativeTime } from "@/app/lib/subscriptions";
 
 export const dynamic = "force-dynamic";
 
@@ -11,11 +16,14 @@ interface BrandPageProps {
 
 export default async function BrandPage({ params }: BrandPageProps) {
   const { slug } = await params;
-  const brand = await fetchBrandBySlug(decodeURIComponent(slug));
+  const resolvedSlug = decodeURIComponent(slug);
+  const brand = await fetchBrandBySlug(resolvedSlug);
 
   if (!brand) {
     notFound();
   }
+
+  const news = await fetchBrandNewsBySlug(brand.slug);
 
   return (
     <div className="min-h-screen bg-black text-zinc-100">
@@ -57,33 +65,78 @@ export default async function BrandPage({ params }: BrandPageProps) {
               <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">
                 Latest Brand News &amp; Drops
               </h2>
-              <span className="rounded-full border border-zinc-800 px-2.5 py-1 text-[10px] uppercase tracking-widest text-zinc-600">
-                Coming soon
-              </span>
+              {news.length === 0 && (
+                <span className="rounded-full border border-zinc-800 px-2.5 py-1 text-[10px] uppercase tracking-widest text-zinc-600">
+                  Coming soon
+                </span>
+              )}
             </div>
 
-            <ul className="mt-5 space-y-3">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <li
-                  key={index}
-                  className="flex items-center gap-4 rounded-xl border border-zinc-900 bg-zinc-900/40 p-4"
-                >
-                  <div className="h-12 w-12 shrink-0 animate-pulse rounded-lg bg-zinc-800" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-800" />
-                    <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-800/70" />
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {news.length > 0 ? (
+              <ul className="mt-5 space-y-3">
+                {news.map((item) => (
+                  <NewsRow key={item.id} item={item} />
+                ))}
+              </ul>
+            ) : (
+              <ul className="mt-5 space-y-3">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <li
+                    key={index}
+                    className="flex items-center gap-4 rounded-xl border border-zinc-900 bg-zinc-900/40 p-4"
+                  >
+                    <div className="h-12 w-12 shrink-0 animate-pulse rounded-lg bg-zinc-800" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 w-2/3 animate-pulse rounded bg-zinc-800" />
+                      <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-800/70" />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
 
         <section className="mt-8">
-          <SubscriptionSettings />
+          <SubscriptionSettings slug={brand.slug} />
         </section>
       </div>
     </div>
+  );
+}
+
+function NewsRow({ item }: { item: BrandNewsItem }) {
+  return (
+    <li>
+      <a
+        href={item.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-4 rounded-xl border border-zinc-900 bg-zinc-900/40 p-4 transition-colors hover:border-zinc-700 hover:bg-zinc-900"
+      >
+        {item.image_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={item.image_url}
+            alt=""
+            className="h-14 w-14 shrink-0 rounded-lg object-cover"
+          />
+        ) : (
+          <div className="h-14 w-14 shrink-0 rounded-lg bg-zinc-800" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
+            {item.category}
+          </p>
+          <p className="mt-1 truncate text-sm font-medium text-zinc-100">
+            {item.notification_banner || item.title}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {formatRelativeTime(item.published_at)}
+          </p>
+        </div>
+      </a>
+    </li>
   );
 }
 

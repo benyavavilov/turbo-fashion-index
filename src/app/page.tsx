@@ -1,4 +1,5 @@
 import BrandSearch from "@/app/components/BrandSearch";
+import YourFeed from "@/app/components/YourFeed";
 import { fetchBrandsFromDatabase } from "@/app/lib/search-config";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +9,8 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-black text-zinc-100">
-      <main className="mx-auto flex min-h-screen max-w-5xl flex-col items-center justify-center px-6 py-24">
-        <div className="mb-16 flex flex-col items-center gap-5 text-center">
+      <main className="mx-auto flex min-h-screen max-w-3xl flex-col px-6 py-24">
+        <div className="mb-12 flex flex-col items-center gap-5 text-center">
           <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-zinc-600">
             Step 01 · Index Platform
           </p>
@@ -21,11 +22,13 @@ export default async function Home() {
           </p>
         </div>
 
-        <div className="w-full max-w-xl">
+        <div className="mx-auto w-full max-w-xl">
           <BrandSearch items={items} />
         </div>
 
-        <footer className="mt-20 font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-700">
+        <YourFeed brands={items} />
+
+        <footer className="mt-20 text-center font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-700">
           Architecture Platform · v0.1
         </footer>
       </main>

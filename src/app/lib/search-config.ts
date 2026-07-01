@@ -16,7 +16,39 @@ export interface BrandDetail {
   homepage: string | null;
 }
 
+export interface BrandNewsItem {
+  id: string;
+  brand_slug: string;
+  category: string;
+  notification_banner: string;
+  url: string;
+  image_url: string;
+  title: string;
+  published_at: string;
+  source: string;
+}
+
 const BRANDS_TABLE = "tracked_brands";
+const NEWS_TABLE = "brand_news";
+
+const NEWS_COLUMNS =
+  "id, brand_slug, category, notification_banner, url, image_url, title, published_at, source";
+
+function mapNewsRow(row: Record<string, unknown>): BrandNewsItem {
+  return {
+    id: row.id != null ? String(row.id) : String(row.url ?? ""),
+    brand_slug: typeof row.brand_slug === "string" ? row.brand_slug : "",
+    category: typeof row.category === "string" ? row.category : "General",
+    notification_banner:
+      typeof row.notification_banner === "string" ? row.notification_banner : "",
+    url: typeof row.url === "string" ? row.url : "",
+    image_url: typeof row.image_url === "string" ? row.image_url : "",
+    title: typeof row.title === "string" ? row.title : "",
+    published_at:
+      typeof row.published_at === "string" ? row.published_at : "",
+    source: typeof row.source === "string" ? row.source : "",
+  };
+}
 
 function toScore(value: unknown): number {
   const num = typeof value === "string" ? Number(value) : value;
@@ -138,5 +170,61 @@ export async function fetchBrandBySlug(
   } catch (error) {
     console.error("Vercel DB Error:", error);
     return null;
+  }
+}
+
+export async function fetchBrandNewsBySlug(
+  slug: string,
+): Promise<BrandNewsItem[]> {
+  try {
+    const client = getSupabasePublicEnv() ? getSupabase() : null;
+    if (!client) {
+      return [];
+    }
+
+    const { data, error } = await client
+      .from(NEWS_TABLE)
+      .select(NEWS_COLUMNS)
+      .eq("brand_slug", slug)
+      .order("published_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map(mapNewsRow);
+  } catch (error) {
+    console.error("Vercel DB Error:", error);
+    return [];
+  }
+}
+
+export async function fetchNewsForSlugs(
+  slugs: string[],
+): Promise<BrandNewsItem[]> {
+  if (slugs.length === 0) {
+    return [];
+  }
+
+  try {
+    const client = getSupabasePublicEnv() ? getSupabase() : null;
+    if (!client) {
+      return [];
+    }
+
+    const { data, error } = await client
+      .from(NEWS_TABLE)
+      .select(NEWS_COLUMNS)
+      .in("brand_slug", slugs)
+      .order("published_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data ?? []).map(mapNewsRow);
+  } catch (error) {
+    console.error("Vercel DB Error:", error);
+    return [];
   }
 }
