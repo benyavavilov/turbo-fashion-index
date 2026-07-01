@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import BrandThumbnail from "@/app/components/BrandThumbnail";
 import SubscriptionSettings from "@/app/components/SubscriptionSettings";
 import {
   fetchBrandBySlug,
@@ -114,16 +115,11 @@ function NewsRow({ item }: { item: BrandNewsItem }) {
         rel="noopener noreferrer"
         className="flex items-center gap-4 rounded-xl border border-zinc-900 bg-zinc-900/40 p-4 transition-colors hover:border-zinc-700 hover:bg-zinc-900"
       >
-        {item.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.image_url}
-            alt=""
-            className="h-14 w-14 shrink-0 rounded-lg object-cover"
-          />
-        ) : (
-          <div className="h-14 w-14 shrink-0 rounded-lg bg-zinc-800" />
-        )}
+        <BrandThumbnail
+          imageUrl={item.image_url}
+          brandSlug={item.brand_slug}
+          className="h-14 w-14"
+        />
         <div className="min-w-0 flex-1">
           <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
             {item.category}

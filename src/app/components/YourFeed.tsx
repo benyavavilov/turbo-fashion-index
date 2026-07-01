@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import BrandThumbnail from "@/app/components/BrandThumbnail";
 import {
   fetchNewsForSlugs,
   type BrandNewsItem,
@@ -230,16 +231,11 @@ function FeedItem({
         rel="noopener noreferrer"
         className="flex items-center gap-4 rounded-xl border border-zinc-900 bg-zinc-950 p-4 transition-colors hover:border-zinc-700 hover:bg-zinc-900"
       >
-        {item.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.image_url}
-            alt=""
-            className="h-16 w-16 shrink-0 rounded-lg object-cover"
-          />
-        ) : (
-          <div className="h-16 w-16 shrink-0 rounded-lg bg-zinc-800" />
-        )}
+        <BrandThumbnail
+          imageUrl={item.image_url}
+          brandSlug={item.brand_slug}
+          className="h-16 w-16"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
