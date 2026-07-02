@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "fetch:trends": "node --env-file=.env.local --import tsx scripts/fetch-trends.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0",
@@ -25,6 +26,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.22.5",
     "typescript": "^5"
   }
 }
