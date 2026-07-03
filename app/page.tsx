@@ -1,5 +1,3 @@
-"use client";
-
 import {
   Activity,
   ArrowDownRight,
@@ -7,7 +5,6 @@ import {
   BarChart3,
   Bell,
   Calendar,
-  Download,
   Gauge,
   Globe,
   LayoutDashboard,
@@ -16,28 +13,12 @@ import {
   Settings,
   TrendingUp,
 } from "lucide-react";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
-// Mock 6-month search-interest index for two brands.
-const trendData = [
-  { month: "Jan", brandA: 62, brandB: 48 },
-  { month: "Feb", brandA: 59, brandB: 53 },
-  { month: "Mar", brandA: 68, brandB: 57 },
-  { month: "Apr", brandA: 74, brandB: 61 },
-  { month: "May", brandA: 71, brandB: 69 },
-  { month: "Jun", brandA: 83, brandB: 72 },
-];
+import { getTrendData } from "./actions";
+import TrendExplorer from "./components/trend-explorer";
 
-const BRAND_A_COLOR = "#6366f1"; // indigo
-const BRAND_B_COLOR = "#10b981"; // emerald
+// Always render at request time so the dashboard reflects live Supabase data.
+export const dynamic = "force-dynamic";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Overview", active: true },
@@ -57,70 +38,34 @@ const kpis = [
     hint: "vs. 6-month start",
   },
   {
-    label: "Brand A Interest",
-    value: "83",
-    delta: "+12 pts",
+    label: "Tracked Entities",
+    value: "20",
+    delta: "brands + trends",
     up: true,
     icon: Activity,
-    hint: "peak in June",
+    hint: "live from Supabase",
   },
   {
-    label: "Brand B Interest",
-    value: "72",
-    delta: "+24 pts",
+    label: "Top Mover",
+    value: "Quiet Luxury",
+    delta: "+41 pts",
     up: true,
     icon: Gauge,
-    hint: "closing the gap",
+    hint: "fastest riser",
   },
   {
-    label: "A–B Spread",
-    value: "11 pts",
-    delta: "-13 pts",
-    up: false,
+    label: "Data Coverage",
+    value: "6 mo",
+    delta: "weekly",
+    up: true,
     icon: BarChart3,
-    hint: "narrowing lead",
+    hint: "rolling window",
   },
 ];
 
-type TooltipEntry = { name: string; value: number; color: string };
+export default async function Home() {
+  const { data, entities } = await getTrendData();
 
-function ChartTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: TooltipEntry[];
-  label?: string;
-}) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900/95 px-3 py-2 shadow-xl backdrop-blur">
-      <p className="mb-1 text-xs font-medium uppercase tracking-wider text-neutral-500">
-        {label}
-      </p>
-      {payload.map((entry) => (
-        <div
-          key={entry.name}
-          className="flex items-center justify-between gap-6 text-sm"
-        >
-          <span className="flex items-center gap-2 text-neutral-300">
-            <span
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: entry.color }}
-            />
-            {entry.name}
-          </span>
-          <span className="font-mono font-medium text-neutral-100">
-            {entry.value}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export default function Home() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
@@ -224,103 +169,12 @@ export default function Home() {
             ))}
           </section>
 
-          {/* Main chart */}
-          <section className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-5">
-            <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h2 className="text-base font-semibold text-neutral-100">
-                  Search Interest Over Time
-                </h2>
-                <p className="text-sm text-neutral-500">
-                  Normalized index (0–100) · Jan – Jun
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-4 text-sm">
-                  <span className="flex items-center gap-2 text-neutral-300">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: BRAND_A_COLOR }}
-                    />
-                    Brand A
-                  </span>
-                  <span className="flex items-center gap-2 text-neutral-300">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: BRAND_B_COLOR }}
-                    />
-                    Brand B
-                  </span>
-                </div>
-                <button className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-300 transition-colors hover:bg-neutral-800">
-                  <Download className="h-4 w-4" />
-                  Export
-                </button>
-              </div>
-            </div>
-
-            <div className="h-80 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={trendData}
-                  margin={{ top: 8, right: 12, left: -8, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient id="brandA" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BRAND_A_COLOR} stopOpacity={0.25} />
-                      <stop offset="100%" stopColor={BRAND_A_COLOR} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#262626"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="month"
-                    stroke="#525252"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={{ stroke: "#262626" }}
-                  />
-                  <YAxis
-                    domain={[0, 100]}
-                    stroke="#525252"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                    width={40}
-                  />
-                  <Tooltip
-                    content={<ChartTooltip />}
-                    cursor={{ stroke: "#404040", strokeWidth: 1 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="brandA"
-                    name="Brand A"
-                    stroke={BRAND_A_COLOR}
-                    strokeWidth={2}
-                    dot={{ r: 3, fill: BRAND_A_COLOR, strokeWidth: 0 }}
-                    activeDot={{ r: 5 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="brandB"
-                    name="Brand B"
-                    stroke={BRAND_B_COLOR}
-                    strokeWidth={2}
-                    dot={{ r: 3, fill: BRAND_B_COLOR, strokeWidth: 0 }}
-                    activeDot={{ r: 5 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
+          {/* Live, interactive trend explorer (Client Component) */}
+          <TrendExplorer data={data} entities={entities} />
 
           <p className="text-center text-xs text-neutral-600">
-            Mock data shown for demonstration. Live figures will be sourced from
-            the Google Trends pipeline.
+            Search interest sourced from the Google Trends pipeline and stored in
+            Supabase. Toggle between brands and cultural trends above.
           </p>
         </main>
       </div>

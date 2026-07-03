@@ -25,8 +25,23 @@ import googleTrends from "google-trends-api";
 // Configuration
 // ---------------------------------------------------------------------------
 
-/** Delay between each brand's Google Trends request, to avoid 429 rate limits. */
-const REQUEST_DELAY_MS = 4000;
+/**
+ * Humanized jitter window between requests. Instead of a predictable static
+ * pause we sleep a random duration in this range to look less bot-like and
+ * reduce the odds of tripping Google's CAPTCHA wall.
+ */
+const JITTER_MIN_MS = 12000;
+const JITTER_MAX_MS = 22000;
+
+/** Retry loop settings for the CAPTCHA / non-JSON response wall. */
+const MAX_ATTEMPTS = 3;
+const COOLDOWN_MS = 30000;
+
+/**
+ * Smart-resumption threshold. If an entity already has at least this many
+ * points stored, we treat its data as fresh and skip the fetch entirely.
+ */
+const FRESH_DATA_THRESHOLD = 170;
 
 /** How far back to pull the search-interest timeline. */
 const MONTHS_OF_HISTORY = 6;
@@ -111,6 +126,11 @@ interface MetricRow {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Random integer in [min, max] — our "humanized" inter-request delay. */
+function randomJitterMs(min = JITTER_MIN_MS, max = JITTER_MAX_MS): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 function startOfHistoryWindow(): Date {
   const start = new Date();
   start.setMonth(start.getMonth() - MONTHS_OF_HISTORY);
@@ -143,7 +163,28 @@ async function seedEntities(): Promise<Map<string, string>> {
 }
 
 /**
+ * Smart resumption: how many metric points does this entity already have?
+ * A cheap HEAD/count query lets us skip entities whose data is already fresh
+ * so we don't spend rate limits re-fetching them.
+ */
+async function existingMetricCount(entityId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("market_metrics")
+    .select("id", { count: "exact", head: true })
+    .eq("entity_id", entityId);
+
+  if (error) {
+    // Non-fatal: if the count check fails, fall back to fetching.
+    console.warn(`      (count check failed: ${error.message})`);
+    return 0;
+  }
+
+  return count ?? 0;
+}
+
+/**
  * Query Google Trends for one keyword and return normalized metric rows.
+ * Throws when Google returns HTML instead of JSON (the CAPTCHA / rate-limit wall).
  */
 async function fetchMetricsForEntity(
   entity: TrackedEntity,
@@ -159,9 +200,9 @@ async function fetchMetricsForEntity(
   try {
     payload = JSON.parse(raw) as InterestOverTimePayload;
   } catch {
-    // Google occasionally returns an HTML error page instead of JSON (rate limits, etc.)
+    // Google returned an HTML page (e.g. "<HEAD>...") instead of JSON — CAPTCHA wall.
     throw new Error(
-      `Unexpected non-JSON response for "${entity.name}" (likely a rate limit).`
+      `Non-JSON response for "${entity.name}" (CAPTCHA / rate-limit wall).`
     );
   }
 
@@ -179,6 +220,42 @@ async function fetchMetricsForEntity(
         interest_value: point.value[0],
       };
     });
+}
+
+/**
+ * Retry wrapper with exponential backoff. When the parse fails (CAPTCHA wall),
+ * we warn, let the IP cool down for an exponentially growing interval, and try
+ * that same brand again — up to MAX_ATTEMPTS times.
+ */
+async function fetchMetricsWithRetry(
+  entity: TrackedEntity,
+  entityId: string,
+  startTime: Date
+): Promise<MetricRow[]> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fetchMetricsForEntity(entity, entityId, startTime);
+    } catch (err) {
+      lastError = err;
+      const message = err instanceof Error ? err.message : String(err);
+
+      if (attempt < MAX_ATTEMPTS) {
+        // Exponential backoff: 30s, 60s, 120s, ...
+        const cooldown = COOLDOWN_MS * 2 ** (attempt - 1);
+        console.warn(
+          `      ! ${entity.name}: attempt ${attempt}/${MAX_ATTEMPTS} failed (${message}). ` +
+            `Cooling down ${(cooldown / 1000).toFixed(0)}s before retry...`
+        );
+        await sleep(cooldown);
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed after ${MAX_ATTEMPTS} attempts.`);
 }
 
 /**
@@ -215,6 +292,7 @@ async function main(): Promise<void> {
   let totalRows = 0;
   let succeeded = 0;
   let failed = 0;
+  let skipped = 0;
 
   for (let i = 0; i < ENTITIES.length; i++) {
     const entity = ENTITIES[i];
@@ -227,32 +305,49 @@ async function main(): Promise<void> {
       continue;
     }
 
+    // Smart resumption: skip entities that already have fresh data.
+    const existing = await existingMetricCount(entityId);
+    if (existing > FRESH_DATA_THRESHOLD) {
+      skipped++;
+      console.log(
+        `  ${position}  Skipping ${entity.name} - Data already fresh (${existing} points).`
+      );
+      continue;
+    }
+
+    let fetchedThisEntity = false;
     try {
-      const rows = await fetchMetricsForEntity(entity, entityId, startTime);
+      const rows = await fetchMetricsWithRetry(entity, entityId, startTime);
       await persistMetrics(rows);
       totalRows += rows.length;
       succeeded++;
+      fetchedThisEntity = true;
       console.log(
         `  ${position}  ${entity.name.padEnd(16)} -> upserted ${rows.length} data points.`
       );
     } catch (err) {
       failed++;
+      fetchedThisEntity = true;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`  ${position}  ${entity.name.padEnd(16)} -> FAILED: ${message}`);
     }
 
-    // Rate-limit guard: pause between every request (skip after the last one).
-    if (i < ENTITIES.length - 1) {
-      await sleep(REQUEST_DELAY_MS);
+    // Humanized jitter: only pause when we actually hit the network, and never
+    // after the final entity.
+    if (fetchedThisEntity && i < ENTITIES.length - 1) {
+      const delay = randomJitterMs();
+      console.log(`      … waiting ${(delay / 1000).toFixed(1)}s (jitter)`);
+      await sleep(delay);
     }
   }
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log("\n=== Ingestion complete ===");
-  console.log(`  Entities OK : ${succeeded}`);
-  console.log(`  Entities KO : ${failed}`);
-  console.log(`  Data points : ${totalRows}`);
-  console.log(`  Elapsed     : ${elapsed}s`);
+  console.log(`  Entities OK      : ${succeeded}`);
+  console.log(`  Entities skipped : ${skipped}`);
+  console.log(`  Entities KO      : ${failed}`);
+  console.log(`  Data points      : ${totalRows}`);
+  console.log(`  Elapsed          : ${elapsed}s`);
 }
 
 main()
