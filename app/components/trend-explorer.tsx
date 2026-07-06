@@ -13,6 +13,7 @@ import {
 } from "recharts";
 
 import type { EntityCategory, EntityMeta, TrendDatum } from "@/app/actions";
+import { getTrendData } from "@/app/actions";
 
 const PALETTE = [
   "#6366f1",
@@ -34,6 +35,8 @@ const PALETTE = [
 
 const SMA_WINDOW_DAYS = 90;
 const SMA_KEY_SUFFIX = "__sma";
+const RATIO_KEY = "ratio";
+const RATIO_COLOR = "#2dd4bf"; // neon teal
 
 type Timeframe = "6M" | "1Y" | "5Y";
 
@@ -63,7 +66,13 @@ const SAMPLE_DATA: TrendDatum[] = [
   { date: "2025-06", Nike: 86, Lululemon: 82, Adidas: 78, Zara: 74, Gorpcore: 52, "Y2K Fashion": 64, "Quiet Luxury": 71, Streetwear: 73 },
 ];
 
-type TooltipEntry = { name: string; value: number; color: string; dataKey?: string };
+type TooltipEntry = {
+  name: string;
+  value: number;
+  color: string;
+  dataKey?: string;
+  payload?: TrendDatum;
+};
 
 function smaKey(name: string): string {
   return `${name}${SMA_KEY_SUFFIX}`;
@@ -145,6 +154,99 @@ function defaultSelection(entities: EntityMeta[]): Set<string> {
   const brands = entities.filter((e) => e.category === "brand").slice(0, 4);
   const trends = entities.filter((e) => e.category === "trend").slice(0, 2);
   return new Set([...brands, ...trends].map((e) => e.name));
+}
+
+function defaultRatioPair(entities: EntityMeta[]): {
+  numerator: string;
+  denominator: string;
+} {
+  const brands = entities.filter((e) => e.category === "brand");
+  return {
+    numerator: brands[0]?.name ?? entities[0]?.name ?? "",
+    denominator: brands[1]?.name ?? entities[1]?.name ?? "",
+  };
+}
+
+/** Per-date substitution ratio: numerator interest ÷ denominator interest. */
+function computeRatioSeries(
+  data: TrendDatum[],
+  numerator: string,
+  denominator: string
+): TrendDatum[] {
+  return data
+    .map((row) => {
+      const num = row[numerator];
+      const den = row[denominator];
+      if (typeof num !== "number" || typeof den !== "number" || den === 0) {
+        return { date: row.date };
+      }
+      return {
+        date: row.date,
+        [RATIO_KEY]: Math.round((num / den) * 1000) / 1000,
+        __numerator: num,
+        __denominator: den,
+      };
+    })
+    .filter((row) => typeof row[RATIO_KEY] === "number");
+}
+
+function ratioDomain(data: TrendDatum[]): [number, number] {
+  const values = data
+    .map((row) => row[RATIO_KEY])
+    .filter((v): v is number => typeof v === "number");
+  if (values.length === 0) return [0, 2];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 0.5;
+  const pad = span * 0.12;
+  return [Math.max(0, min - pad), max + pad];
+}
+
+function RatioTooltip({
+  active,
+  payload,
+  label,
+  numerator,
+  denominator,
+}: {
+  active?: boolean;
+  payload?: TooltipEntry[];
+  label?: string;
+  numerator: string;
+  denominator: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  const row = entry?.payload as TrendDatum | undefined;
+  const numVal = row?.__numerator;
+  const denVal = row?.__denominator;
+
+  return (
+    <div className="rounded-lg border border-teal-500/20 bg-neutral-950/95 px-3 py-2.5 shadow-2xl backdrop-blur">
+      <p className="mb-2 text-[10px] font-medium uppercase tracking-widest text-neutral-500">
+        {label}
+      </p>
+      <div className="flex items-center justify-between gap-8">
+        <span className="flex items-center gap-2 text-sm text-teal-300">
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: RATIO_COLOR }}
+          />
+          {numerator} ÷ {denominator}
+        </span>
+        <span className="font-mono text-sm font-semibold text-teal-100">
+          {typeof entry.value === "number" ? entry.value.toFixed(3) : entry.value}
+        </span>
+      </div>
+      {typeof numVal === "number" && typeof denVal === "number" && (
+        <p className="mt-2 border-t border-neutral-800 pt-2 text-[11px] text-neutral-500">
+          {numerator}: <span className="font-mono text-neutral-400">{numVal}</span>
+          {" · "}
+          {denominator}: <span className="font-mono text-neutral-400">{denVal}</span>
+        </p>
+      )}
+    </div>
+  );
 }
 
 function ChartTooltip({
@@ -329,23 +431,141 @@ function EntityPicker({
   );
 }
 
+function RatioAnalysisPanel({
+  entities,
+  numerator,
+  denominator,
+  ratioMode,
+  onNumeratorChange,
+  onDenominatorChange,
+  onRatioModeChange,
+}: {
+  entities: EntityMeta[];
+  numerator: string;
+  denominator: string;
+  ratioMode: boolean;
+  onNumeratorChange: (name: string) => void;
+  onDenominatorChange: (name: string) => void;
+  onRatioModeChange: (enabled: boolean) => void;
+}) {
+  const sorted = useMemo(
+    () => [...entities].sort((a, b) => a.name.localeCompare(b.name)),
+    [entities]
+  );
+
+  const selectClass =
+    "w-full rounded-md border border-neutral-800 bg-neutral-900/80 px-3 py-2 text-sm text-neutral-200 outline-none transition-colors focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/30";
+
+  return (
+    <div className="rounded-lg border border-neutral-800/80 bg-neutral-950/50">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800/80 px-4 py-3">
+        <div>
+          <p className="text-xs font-medium text-neutral-300">
+            Substitution Analysis (Ratio)
+          </p>
+          <p className="text-[11px] text-neutral-500">
+            Track premium-to-value sentiment shifts in real time
+          </p>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <span className="text-xs text-neutral-400">Enable Ratio Mode</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={ratioMode}
+            onClick={() => onRatioModeChange(!ratioMode)}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              ratioMode ? "bg-teal-500/80" : "bg-neutral-700"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                ratioMode ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </label>
+      </div>
+
+      <div
+        className={`grid gap-4 px-4 py-3 transition-opacity md:grid-cols-2 ${
+          ratioMode ? "opacity-100" : "opacity-50"
+        }`}
+      >
+        <label className="block space-y-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-500">
+            Numerator Entity
+          </span>
+          <select
+            value={numerator}
+            onChange={(e) => onNumeratorChange(e.target.value)}
+            disabled={!ratioMode}
+            className={selectClass}
+          >
+            {sorted.map((e) => (
+              <option key={e.name} value={e.name}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block space-y-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-500">
+            Denominator Entity
+          </span>
+          <select
+            value={denominator}
+            onChange={(e) => onDenominatorChange(e.target.value)}
+            disabled={!ratioMode}
+            className={selectClass}
+          >
+            {sorted.map((e) => (
+              <option key={e.name} value={e.name}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {ratioMode && numerator && denominator && (
+        <p className="border-t border-neutral-800/80 px-4 py-2 text-[11px] text-teal-400/80">
+          Plotting{" "}
+          <span className="font-mono text-teal-300">
+            {numerator} ÷ {denominator}
+          </span>{" "}
+          — values &gt; 1.0 indicate stronger relative search interest in the numerator.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function TrendExplorer({
-  data,
   entities,
 }: {
-  data: TrendDatum[];
   entities: EntityMeta[];
 }) {
-  const isLive = data.length > 0 && entities.length > 0;
-  const sourceData = isLive ? data : SAMPLE_DATA;
+  const isLive = entities.length > 0;
   const allEntities = isLive ? entities : SAMPLE_ENTITIES;
+  const ratioDefaults = useMemo(() => defaultRatioPair(allEntities), [allEntities]);
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
   const [showSMA, setShowSMA] = useState(false);
+  const [ratioMode, setRatioMode] = useState(false);
+  const [numerator, setNumerator] = useState(ratioDefaults.numerator);
+  const [denominator, setDenominator] = useState(ratioDefaults.denominator);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() =>
     defaultSelection(allEntities)
   );
+  const [sourceData, setSourceData] = useState<TrendDatum[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!numerator && ratioDefaults.numerator) setNumerator(ratioDefaults.numerator);
+    if (!denominator && ratioDefaults.denominator) setDenominator(ratioDefaults.denominator);
+  }, [ratioDefaults, numerator, denominator]);
 
   useEffect(() => {
     if (isLive && selected.size === 0) {
@@ -353,26 +573,87 @@ export default function TrendExplorer({
     }
   }, [isLive, allEntities, selected.size]);
 
+  const selectedList = useMemo(
+    () => allEntities.map((e) => e.name).filter((name) => selected.has(name)),
+    [allEntities, selected]
+  );
+
+  const fetchNames = useMemo(() => {
+    const names = new Set(selectedList);
+    if (ratioMode) {
+      if (numerator) names.add(numerator);
+      if (denominator) names.add(denominator);
+    }
+    return [...names].sort();
+  }, [selectedList, ratioMode, numerator, denominator]);
+
+  const fetchKey = fetchNames.join("|");
+
+  // Fetch metrics for selected entities (+ ratio pair when ratio mode is on).
+  useEffect(() => {
+    if (!isLive) {
+      setSourceData(SAMPLE_DATA);
+      return;
+    }
+
+    if (fetchNames.length === 0) {
+      setSourceData([]);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    getTrendData(fetchNames)
+      .then((data) => {
+        if (!cancelled) setSourceData(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceData([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, fetchKey, fetchNames]);
+
   const colorByName = useMemo(() => {
     const map = new Map<string, string>();
     allEntities.forEach((e, i) => map.set(e.name, PALETTE[i % PALETTE.length]));
     return map;
   }, [allEntities]);
 
-  const selectedList = useMemo(
-    () => allEntities.map((e) => e.name).filter((name) => selected.has(name)),
-    [allEntities, selected]
-  );
-
   const filteredData = useMemo(
     () => filterByTimeframe(sourceData, timeframe),
     [sourceData, timeframe]
   );
 
+  const ratioData = useMemo(() => {
+    if (!ratioMode || !numerator || !denominator || numerator === denominator) {
+      return [];
+    }
+    return computeRatioSeries(filteredData, numerator, denominator);
+  }, [filteredData, ratioMode, numerator, denominator]);
+
   const chartData = useMemo(() => {
+    if (ratioMode) return ratioData;
     if (!showSMA || selectedList.length === 0) return filteredData;
     return applySMA(filteredData, selectedList);
-  }, [filteredData, showSMA, selectedList]);
+  }, [ratioMode, ratioData, filteredData, showSMA, selectedList]);
+
+  const yDomain = useMemo((): [number, number] => {
+    if (ratioMode) return ratioDomain(ratioData);
+    return [0, 100];
+  }, [ratioMode, ratioData]);
+
+  const ratioValid =
+    ratioMode &&
+    numerator &&
+    denominator &&
+    numerator !== denominator;
 
   const toggleEntity = (name: string) => {
     setSelected((prev) => {
@@ -445,32 +726,55 @@ export default function TrendExplorer({
           ))}
         </div>
 
-        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-1.5">
+        <label
+          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-1.5 ${
+            ratioMode ? "opacity-40" : ""
+          }`}
+        >
           <span className="text-xs text-neutral-400">90-Day Moving Average</span>
           <button
             type="button"
             role="switch"
             aria-checked={showSMA}
+            disabled={ratioMode}
             onClick={() => setShowSMA((v) => !v)}
             className={`relative h-5 w-9 rounded-full transition-colors ${
-              showSMA ? "bg-indigo-500/80" : "bg-neutral-700"
+              showSMA && !ratioMode ? "bg-indigo-500/80" : "bg-neutral-700"
             }`}
           >
             <span
               className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                showSMA ? "translate-x-4" : "translate-x-0"
+                showSMA && !ratioMode ? "translate-x-4" : "translate-x-0"
               }`}
             />
           </button>
         </label>
 
         <span className="text-[11px] text-neutral-600">
-          {filteredData.length} observations · {selectedList.length} series
+          {ratioMode
+            ? `${ratioData.length} ratio observations`
+            : `${filteredData.length} observations · ${selectedList.length} series`}
         </span>
       </div>
 
+      {/* Ratio engine */}
+      <div className="mb-4">
+        <RatioAnalysisPanel
+          entities={allEntities}
+          numerator={numerator}
+          denominator={denominator}
+          ratioMode={ratioMode}
+          onNumeratorChange={setNumerator}
+          onDenominatorChange={setDenominator}
+          onRatioModeChange={(enabled) => {
+            setRatioMode(enabled);
+            if (enabled) setShowSMA(false);
+          }}
+        />
+      </div>
+
       {/* Multi-select entity picker */}
-      <div className="mb-5">
+      <div className={`mb-5 ${ratioMode ? "opacity-40 pointer-events-none" : ""}`}>
         <EntityPicker
           entities={allEntities}
           selected={selected}
@@ -484,7 +788,15 @@ export default function TrendExplorer({
 
       {/* Chart */}
       <div className="h-96 w-full rounded-lg border border-neutral-800/60 bg-neutral-950/30 p-2">
-        {selectedList.length === 0 ? (
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+            Loading series…
+          </div>
+        ) : ratioMode && !ratioValid ? (
+          <div className="flex h-full items-center justify-center text-sm text-neutral-600">
+            Select distinct numerator and denominator entities.
+          </div>
+        ) : !ratioMode && selectedList.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-neutral-600">
             Select at least one entity to plot.
           </div>
@@ -496,7 +808,7 @@ export default function TrendExplorer({
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
               data={chartData}
-              margin={{ top: 12, right: 16, left: 0, bottom: 4 }}
+              margin={{ top: 12, right: 16, left: ratioMode ? 4 : 0, bottom: 4 }}
             >
               <CartesianGrid
                 strokeDasharray="3 3"
@@ -513,78 +825,123 @@ export default function TrendExplorer({
                 minTickGap={32}
               />
               <YAxis
-                domain={[0, 100]}
+                domain={yDomain}
                 stroke="#525252"
                 fontSize={11}
                 tickLine={false}
                 axisLine={false}
-                width={36}
-                tickFormatter={(v) => String(v)}
+                width={ratioMode ? 44 : 36}
+                tickFormatter={(v) =>
+                  ratioMode ? Number(v).toFixed(1) : String(v)
+                }
               />
-              <Tooltip
-                content={<ChartTooltip />}
-                cursor={{ stroke: "#404040", strokeWidth: 1 }}
-              />
-              {selectedList.map((name) => (
+              {ratioMode ? (
+                <Tooltip
+                  content={
+                    <RatioTooltip
+                      numerator={numerator}
+                      denominator={denominator}
+                    />
+                  }
+                  cursor={{ stroke: RATIO_COLOR, strokeWidth: 1, strokeOpacity: 0.4 }}
+                />
+              ) : (
+                <Tooltip
+                  content={<ChartTooltip />}
+                  cursor={{ stroke: "#404040", strokeWidth: 1 }}
+                />
+              )}
+              {ratioMode ? (
                 <Line
-                  key={name}
                   type="monotone"
-                  dataKey={name}
-                  name={name}
-                  stroke={colorByName.get(name)}
-                  strokeWidth={2}
+                  dataKey={RATIO_KEY}
+                  name={`${numerator} ÷ ${denominator}`}
+                  stroke={RATIO_COLOR}
+                  strokeWidth={2.5}
                   dot={false}
-                  activeDot={{ r: 4 }}
+                  activeDot={{ r: 5, fill: RATIO_COLOR }}
                   connectNulls
                 />
-              ))}
-              {showSMA &&
-                selectedList.map((name) => (
-                  <Line
-                    key={smaKey(name)}
-                    type="monotone"
-                    dataKey={smaKey(name)}
-                    name={smaKey(name)}
-                    stroke={colorByName.get(name)}
-                    strokeWidth={1.5}
-                    strokeDasharray="6 4"
-                    strokeOpacity={0.75}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    connectNulls
-                  />
-                ))}
+              ) : (
+                <>
+                  {selectedList.map((name) => (
+                    <Line
+                      key={name}
+                      type="monotone"
+                      dataKey={name}
+                      name={name}
+                      stroke={colorByName.get(name)}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                      connectNulls
+                    />
+                  ))}
+                  {showSMA &&
+                    selectedList.map((name) => (
+                      <Line
+                        key={smaKey(name)}
+                        type="monotone"
+                        dataKey={smaKey(name)}
+                        name={smaKey(name)}
+                        stroke={colorByName.get(name)}
+                        strokeWidth={1.5}
+                        strokeDasharray="6 4"
+                        strokeOpacity={0.75}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        connectNulls
+                      />
+                    ))}
+                </>
+              )}
             </LineChart>
           </ResponsiveContainer>
         )}
       </div>
 
       {/* Active series legend */}
-      {selectedList.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-3 border-t border-neutral-800/80 pt-4">
-          {selectedList.map((name) => (
+      {ratioMode && ratioValid && ratioData.length > 0 ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-neutral-800/80 pt-4">
+          <span className="flex items-center gap-2 text-[11px] text-neutral-400">
             <span
-              key={name}
-              className="flex items-center gap-2 text-[11px] text-neutral-400"
-            >
-              <span
-                className="h-2 w-4 rounded-sm"
-                style={{ backgroundColor: colorByName.get(name) }}
-              />
-              <span className="font-mono text-neutral-300">{name}</span>
-              {showSMA && (
-                <span className="text-neutral-600">
-                  +{" "}
-                  <span
-                    className="inline-block w-3 border-t border-dashed align-middle"
-                    style={{ borderColor: colorByName.get(name) }}
-                  />{" "}
-                  SMA
-                </span>
-              )}
+              className="h-2 w-6 rounded-sm"
+              style={{ backgroundColor: RATIO_COLOR }}
+            />
+            <span className="font-mono text-teal-300">
+              {numerator} ÷ {denominator}
             </span>
-          ))}
+            <span className="text-neutral-600">substitution ratio</span>
+          </span>
         </div>
+      ) : (
+        selectedList.length > 0 &&
+        !ratioMode && (
+          <div className="mt-4 flex flex-wrap gap-3 border-t border-neutral-800/80 pt-4">
+            {selectedList.map((name) => (
+              <span
+                key={name}
+                className="flex items-center gap-2 text-[11px] text-neutral-400"
+              >
+                <span
+                  className="h-2 w-4 rounded-sm"
+                  style={{ backgroundColor: colorByName.get(name) }}
+                />
+                <span className="font-mono text-neutral-300">{name}</span>
+                {showSMA && (
+                  <span className="text-neutral-600">
+                    +{" "}
+                    <span
+                      className="inline-block w-3 border-t border-dashed align-middle"
+                      style={{ borderColor: colorByName.get(name) }}
+                    />{" "}
+                    SMA
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+        )
       )}
     </section>
   );

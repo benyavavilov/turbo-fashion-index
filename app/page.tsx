@@ -14,7 +14,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-import { getTrendData } from "./actions";
+import { getTrackedEntities } from "./actions";
 import TrendExplorer from "./components/trend-explorer";
 
 // Always render at request time so the dashboard reflects live Supabase data.
@@ -64,7 +64,7 @@ const kpis = [
 ];
 
 export default async function Home() {
-  const { data, entities } = await getTrendData();
+  const entities = await getTrackedEntities();
 
   return (
     <div className="flex min-h-screen">
@@ -170,7 +170,7 @@ export default async function Home() {
           </section>
 
           {/* Live, interactive trend explorer (Client Component) */}
-          <TrendExplorer data={data} entities={entities} />
+          <TrendExplorer entities={entities} />
 
           <p className="text-center text-xs text-neutral-600">
             Search interest sourced from the Google Trends pipeline and stored in
