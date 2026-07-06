@@ -2,6 +2,8 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+import { normalizeDateString } from "@/lib/chart-data";
+
 export type EntityCategory = "brand" | "trend";
 
 export interface EntityMeta {
@@ -12,7 +14,7 @@ export interface EntityMeta {
 /** One row per date; each tracked entity is a numeric column keyed by its name. */
 export interface TrendDatum {
   date: string;
-  [entityName: string]: string | number;
+  [entityName: string]: string | number | null | undefined;
 }
 
 /** Shape of a joined row returned by the Supabase query. */
@@ -107,10 +109,12 @@ function reshapeForRecharts(rows: MetricJoinRow[]): TrendDatum[] {
     const entity = row.tracked_entities;
     if (!entity?.name) continue;
 
-    let bucket = byDate.get(row.recorded_date);
+    const date = normalizeDateString(row.recorded_date);
+
+    let bucket = byDate.get(date);
     if (!bucket) {
-      bucket = { date: row.recorded_date };
-      byDate.set(row.recorded_date, bucket);
+      bucket = { date };
+      byDate.set(date, bucket);
     }
     bucket[entity.name] = row.interest_value;
   }

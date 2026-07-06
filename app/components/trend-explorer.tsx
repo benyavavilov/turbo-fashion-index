@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download, Search } from "lucide-react";
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,6 +15,14 @@ import {
 
 import type { EntityCategory, EntityMeta, TrendDatum } from "@/app/actions";
 import { getTrendData } from "@/app/actions";
+import EntityLogo from "@/app/components/entity-logo";
+import { getBrandTicker } from "@/lib/brand-assets";
+import type { ChartContext, Timeframe } from "@/lib/chart-context";
+import {
+  groupAndAlignChartData,
+  mergeStockPrices,
+  normalizeDateString,
+} from "@/lib/chart-data";
 
 const PALETTE = [
   "#6366f1",
@@ -37,8 +46,8 @@ const SMA_WINDOW_DAYS = 90;
 const SMA_KEY_SUFFIX = "__sma";
 const RATIO_KEY = "ratio";
 const RATIO_COLOR = "#2dd4bf"; // neon teal
-
-type Timeframe = "6M" | "1Y" | "5Y";
+const STOCK_KEY = "__stock";
+const STOCK_COLOR = "#fbbf24"; // neon gold
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
   { id: "6M", label: "6 Months" },
@@ -253,10 +262,12 @@ function ChartTooltip({
   active,
   payload,
   label,
+  categoryByName,
 }: {
   active?: boolean;
   payload?: TooltipEntry[];
   label?: string;
+  categoryByName: Map<string, EntityCategory>;
 }) {
   if (!active || !payload?.length) return null;
 
@@ -266,28 +277,36 @@ function ChartTooltip({
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-950/95 px-3 py-2.5 shadow-2xl backdrop-blur">
       <p className="mb-2 text-[10px] font-medium uppercase tracking-widest text-neutral-500">
-        {label}
+        {normalizeDateString(String(label ?? ""))}
       </p>
       <div className="space-y-1">
         {[...raw]
           .sort((a, b) => b.value - a.value)
-          .map((entry) => (
-            <div
-              key={entry.name}
-              className="flex items-center justify-between gap-8 text-sm"
-            >
-              <span className="flex items-center gap-2 text-neutral-300">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: entry.color }}
-                />
-                {displayName(entry.name)}
-              </span>
-              <span className="font-mono text-xs font-medium text-neutral-100">
-                {entry.value}
-              </span>
-            </div>
-          ))}
+          .map((entry) => {
+            const name = displayName(entry.name);
+            return (
+              <div
+                key={entry.name}
+                className="flex items-center justify-between gap-8 text-sm"
+              >
+                <span className="flex items-center gap-2 text-neutral-300">
+                  <EntityLogo
+                    name={name}
+                    category={categoryByName.get(name)}
+                    size={14}
+                  />
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  {name}
+                </span>
+                <span className="font-mono text-xs font-medium text-neutral-100">
+                  {entry.value}
+                </span>
+              </div>
+            );
+          })}
       </div>
       {smoothed.length > 0 && (
         <div className="mt-2 border-t border-neutral-800 pt-2 space-y-1">
@@ -366,12 +385,17 @@ function EntityPicker({
                 key={entity.name}
                 type="button"
                 onClick={() => onToggle(entity.name)}
-                className={`rounded-full border px-3 py-1 text-xs transition-all ${
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all ${
                   active
                     ? "border-indigo-500/40 bg-indigo-500/15 text-indigo-200 shadow-[0_0_12px_rgba(99,102,241,0.15)]"
                     : "border-neutral-800 bg-neutral-900/40 text-neutral-500 hover:border-neutral-700 hover:text-neutral-300"
                 }`}
               >
+                <EntityLogo
+                  name={entity.name}
+                  category={entity.category}
+                  size={14}
+                />
                 {entity.name}
               </button>
             );
@@ -543,8 +567,10 @@ function RatioAnalysisPanel({
 
 export default function TrendExplorer({
   entities,
+  onChartContextChange,
 }: {
   entities: EntityMeta[];
+  onChartContextChange?: (ctx: ChartContext) => void;
 }) {
   const isLive = entities.length > 0;
   const allEntities = isLive ? entities : SAMPLE_ENTITIES;
@@ -552,6 +578,7 @@ export default function TrendExplorer({
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
   const [showSMA, setShowSMA] = useState(false);
+  const [showStockOverlay, setShowStockOverlay] = useState(false);
   const [ratioMode, setRatioMode] = useState(false);
   const [numerator, setNumerator] = useState(ratioDefaults.numerator);
   const [denominator, setDenominator] = useState(ratioDefaults.denominator);
@@ -626,34 +653,146 @@ export default function TrendExplorer({
     return map;
   }, [allEntities]);
 
-  const filteredData = useMemo(
-    () => filterByTimeframe(sourceData, timeframe),
+  const categoryByName = useMemo(() => {
+    const map = new Map<string, EntityCategory>();
+    allEntities.forEach((e) => map.set(e.name, e.category));
+    return map;
+  }, [allEntities]);
+
+  const stockOverlayEntity = useMemo(() => {
+    if (ratioMode) return getBrandTicker(numerator) ? numerator : undefined;
+    return selectedList.find((name) => getBrandTicker(name));
+  }, [ratioMode, numerator, selectedList]);
+
+  const stockTicker = stockOverlayEntity
+    ? getBrandTicker(stockOverlayEntity)
+    : undefined;
+
+  const [stockByDate, setStockByDate] = useState<Map<string, number>>(
+    () => new Map()
+  );
+
+  useEffect(() => {
+    if (!showStockOverlay || !stockTicker || ratioMode) {
+      setStockByDate(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    fetch(
+      `/api/finance?ticker=${encodeURIComponent(stockTicker)}&timeframe=${timeframe}`
+    )
+      .then((res) => res.json())
+      .then((data: { quotes?: { date: string; close: number }[] }) => {
+        if (cancelled) return;
+        const map = new Map<string, number>();
+        for (const q of data.quotes ?? []) map.set(q.date, q.close);
+        setStockByDate(map);
+      })
+      .catch(() => {
+        if (!cancelled) setStockByDate(new Map());
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showStockOverlay, stockTicker, timeframe, ratioMode]);
+
+  const normalizedFiltered = useMemo(
+    () =>
+      filterByTimeframe(sourceData, timeframe).map((row) => ({
+        ...row,
+        date: normalizeDateString(String(row.date)),
+      })),
     [sourceData, timeframe]
   );
+
+  const alignedFiltered = useMemo(() => {
+    const series = ratioMode
+      ? [numerator, denominator].filter(Boolean)
+      : selectedList;
+    const extra = !ratioMode && showSMA ? selectedList.map(smaKey) : [];
+    return groupAndAlignChartData(normalizedFiltered, series, extra);
+  }, [
+    normalizedFiltered,
+    selectedList,
+    ratioMode,
+    numerator,
+    denominator,
+    showSMA,
+  ]);
 
   const ratioData = useMemo(() => {
     if (!ratioMode || !numerator || !denominator || numerator === denominator) {
       return [];
     }
-    return computeRatioSeries(filteredData, numerator, denominator);
-  }, [filteredData, ratioMode, numerator, denominator]);
+    return computeRatioSeries(alignedFiltered, numerator, denominator);
+  }, [alignedFiltered, ratioMode, numerator, denominator]);
+
+  const chartDataRaw = useMemo(() => {
+    if (ratioMode) return ratioData;
+    if (!showSMA || selectedList.length === 0) return alignedFiltered;
+    return applySMA(alignedFiltered, selectedList);
+  }, [ratioMode, ratioData, alignedFiltered, showSMA, selectedList]);
 
   const chartData = useMemo(() => {
-    if (ratioMode) return ratioData;
-    if (!showSMA || selectedList.length === 0) return filteredData;
-    return applySMA(filteredData, selectedList);
-  }, [ratioMode, ratioData, filteredData, showSMA, selectedList]);
+    if (!showStockOverlay || ratioMode || stockByDate.size === 0) {
+      return chartDataRaw;
+    }
+    return mergeStockPrices(chartDataRaw, stockByDate, STOCK_KEY);
+  }, [chartDataRaw, showStockOverlay, stockByDate, ratioMode]);
 
   const yDomain = useMemo((): [number, number] => {
     if (ratioMode) return ratioDomain(ratioData);
     return [0, 100];
   }, [ratioMode, ratioData]);
 
+  const stockDomain = useMemo((): [number, number] => {
+    const values = chartData
+      .map((row) => row[STOCK_KEY])
+      .filter((v): v is number => typeof v === "number");
+    if (values.length === 0) return [0, 100];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pad = (max - min) * 0.08 || 1;
+    return [Math.max(0, min - pad), max + pad];
+  }, [chartData]);
+
   const ratioValid =
     ratioMode &&
     numerator &&
     denominator &&
     numerator !== denominator;
+
+  useEffect(() => {
+    onChartContextChange?.({
+      timeframe,
+      ratioMode,
+      numerator: ratioMode ? numerator : undefined,
+      denominator: ratioMode ? denominator : undefined,
+      selectedEntities: selectedList,
+      showSMA,
+      showStockOverlay,
+      stockOverlayEntity,
+      stockTicker,
+      recentDataPoints: chartData.slice(-12),
+      observationCount: chartData.length,
+      isLive,
+    });
+  }, [
+    timeframe,
+    ratioMode,
+    numerator,
+    denominator,
+    selectedList,
+    showSMA,
+    showStockOverlay,
+    stockOverlayEntity,
+    stockTicker,
+    chartData,
+    isLive,
+    onChartContextChange,
+  ]);
 
   const toggleEntity = (name: string) => {
     setSelected((prev) => {
@@ -731,6 +870,30 @@ export default function TrendExplorer({
             ratioMode ? "opacity-40" : ""
           }`}
         >
+          <span className="text-xs text-neutral-400">Show Stock Overlay</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showStockOverlay}
+            disabled={ratioMode || !stockTicker}
+            onClick={() => setShowStockOverlay((v) => !v)}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              showStockOverlay && !ratioMode ? "bg-amber-500/80" : "bg-neutral-700"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                showStockOverlay && !ratioMode ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </label>
+
+        <label
+          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-1.5 ${
+            ratioMode ? "opacity-40" : ""
+          }`}
+        >
           <span className="text-xs text-neutral-400">90-Day Moving Average</span>
           <button
             type="button"
@@ -753,7 +916,10 @@ export default function TrendExplorer({
         <span className="text-[11px] text-neutral-600">
           {ratioMode
             ? `${ratioData.length} ratio observations`
-            : `${filteredData.length} observations · ${selectedList.length} series`}
+            : `${chartData.length} observations · ${selectedList.length} series`}
+          {showStockOverlay && stockTicker && !ratioMode
+            ? ` · ${stockTicker} overlay`
+            : ""}
         </span>
       </div>
 
@@ -806,10 +972,16 @@ export default function TrendExplorer({
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart
+            <ComposedChart
               data={chartData}
-              margin={{ top: 12, right: 16, left: ratioMode ? 4 : 0, bottom: 4 }}
+              margin={{ top: 12, right: showStockOverlay && !ratioMode ? 48 : 16, left: ratioMode ? 4 : 0, bottom: 4 }}
             >
+              <defs>
+                <linearGradient id="stockGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={STOCK_COLOR} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={STOCK_COLOR} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
               <CartesianGrid
                 strokeDasharray="3 3"
                 stroke="#262626"
@@ -825,6 +997,7 @@ export default function TrendExplorer({
                 minTickGap={32}
               />
               <YAxis
+                yAxisId="left"
                 domain={yDomain}
                 stroke="#525252"
                 fontSize={11}
@@ -835,6 +1008,19 @@ export default function TrendExplorer({
                   ratioMode ? Number(v).toFixed(1) : String(v)
                 }
               />
+              {showStockOverlay && !ratioMode && stockTicker && (
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  domain={stockDomain}
+                  stroke={STOCK_COLOR}
+                  fontSize={10}
+                  tickLine={false}
+                  axisLine={false}
+                  width={44}
+                  tickFormatter={(v) => `$${Number(v).toFixed(0)}`}
+                />
+              )}
               {ratioMode ? (
                 <Tooltip
                   content={
@@ -847,12 +1033,27 @@ export default function TrendExplorer({
                 />
               ) : (
                 <Tooltip
-                  content={<ChartTooltip />}
+                  content={<ChartTooltip categoryByName={categoryByName} />}
                   cursor={{ stroke: "#404040", strokeWidth: 1 }}
+                />
+              )}
+              {showStockOverlay && !ratioMode && stockTicker && (
+                <Area
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey={STOCK_KEY}
+                  name={`${stockOverlayEntity} (${stockTicker})`}
+                  stroke={STOCK_COLOR}
+                  strokeWidth={1}
+                  fill="url(#stockGradient)"
+                  connectNulls
+                  dot={false}
+                  isAnimationActive={false}
                 />
               )}
               {ratioMode ? (
                 <Line
+                  yAxisId="left"
                   type="monotone"
                   dataKey={RATIO_KEY}
                   name={`${numerator} ÷ ${denominator}`}
@@ -867,6 +1068,7 @@ export default function TrendExplorer({
                   {selectedList.map((name) => (
                     <Line
                       key={name}
+                      yAxisId="left"
                       type="monotone"
                       dataKey={name}
                       name={name}
@@ -881,6 +1083,7 @@ export default function TrendExplorer({
                     selectedList.map((name) => (
                       <Line
                         key={smaKey(name)}
+                        yAxisId="left"
                         type="monotone"
                         dataKey={smaKey(name)}
                         name={smaKey(name)}
@@ -895,7 +1098,7 @@ export default function TrendExplorer({
                     ))}
                 </>
               )}
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>

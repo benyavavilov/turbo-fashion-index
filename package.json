@@ -10,13 +10,18 @@
     "fetch:trends": "node --env-file=.env.local --import tsx scripts/fetch-trends.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.8",
+    "@ai-sdk/openai": "^4.0.8",
+    "@ai-sdk/react": "^4.0.17",
     "@supabase/supabase-js": "^2.110.0",
+    "ai": "^7.0.16",
     "google-trends-api": "^4.9.2",
     "lucide-react": "^1.23.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "recharts": "^3.9.1"
+    "recharts": "^3.9.1",
+    "yahoo-finance2": "^3.15.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
