@@ -41,7 +41,7 @@ const COOLDOWN_MS = 30000;
  * Smart-resumption threshold. If an entity already has at least this many
  * points stored, we treat its data as fresh and skip the fetch entirely.
  */
-const FRESH_DATA_THRESHOLD = 170;
+const FRESH_DATA_THRESHOLD = 250;
 
 /** How far back to pull the search-interest timeline. */
 const MONTHS_OF_HISTORY = 6;
@@ -53,28 +53,51 @@ interface TrackedEntity {
   category: EntityCategory;
 }
 
-/** The 20 entities we track: 15 benchmark brands + 5 macro style movements. */
-const ENTITIES: TrackedEntity[] = [
-  { name: "Abercrombie", category: "brand" },
+/** The 30 entities we track. */
+const TRACKED_ENTITIES: TrackedEntity[] = [
+  // Artificial Scarcity
+  { name: "Supreme", category: "brand" },
+  { name: "Bape", category: "brand" },
+  { name: "Hypebeast", category: "trend" },
+
+  // Utility & Gorpcore
+  { name: "Arc'teryx", category: "brand" },
+  { name: "The North Face", category: "brand" },
+  { name: "Patagonia", category: "brand" },
+  { name: "Carhartt", category: "brand" },
+  { name: "Gorpcore", category: "trend" },
+
+  // Market-Share War (Athletics)
   { name: "Nike", category: "brand" },
-  { name: "Lululemon", category: "brand" },
   { name: "Adidas", category: "brand" },
-  { name: "Ralph Lauren", category: "brand" },
-  { name: "Levi's", category: "brand" },
+  { name: "On Running", category: "brand" },
+  { name: "New Balance", category: "brand" },
+  { name: "Athleisure", category: "trend" },
+
+  // Fast Fashion
+  { name: "Shein", category: "brand" },
   { name: "Zara", category: "brand" },
   { name: "H&M", category: "brand" },
-  { name: "Gap", category: "brand" },
-  { name: "ASOS", category: "brand" },
-  { name: "Uniqlo", category: "brand" },
-  { name: "Shein", category: "brand" },
-  { name: "The North Face", category: "brand" },
-  { name: "New Balance", category: "brand" },
-  { name: "Patagonia", category: "brand" },
-  { name: "Gorpcore", category: "trend" },
-  { name: "Y2K Fashion", category: "trend" },
+  { name: "Fast Fashion", category: "trend" },
+
+  // Wealth Effect & Premium
+  { name: "Louis Vuitton", category: "brand" },
+  { name: "Hermès", category: "brand" },
+  { name: "Goyard", category: "brand" },
+  { name: "Lululemon", category: "brand" },
+  { name: "Ralph Lauren", category: "brand" },
+  { name: "Peter Millar", category: "brand" },
   { name: "Quiet Luxury", category: "trend" },
-  { name: "Athleisure", category: "trend" },
-  { name: "Streetwear", category: "trend" },
+  { name: "Old Money", category: "trend" },
+
+  // Turnaround & Heritage
+  { name: "Abercrombie", category: "brand" },
+  { name: "Gap", category: "brand" },
+
+  // Secondary Market & Nostalgia
+  { name: "Depop", category: "brand" },
+  { name: "Vintage", category: "trend" },
+  { name: "Y2K Fashion", category: "trend" }
 ];
 
 // ---------------------------------------------------------------------------
@@ -142,11 +165,11 @@ function startOfHistoryWindow(): Date {
  * Uses upsert on the unique `name` column so re-runs are idempotent.
  */
 async function seedEntities(): Promise<Map<string, string>> {
-  console.log(`\n[1/2] Seeding ${ENTITIES.length} tracked entities...`);
+  console.log(`\n[1/2] Seeding ${TRACKED_ENTITIES.length} tracked entities...`);
 
   const { data, error } = await supabase
     .from("tracked_entities")
-    .upsert(ENTITIES, { onConflict: "name" })
+    .upsert(TRACKED_ENTITIES, { onConflict: "name" })
     .select("id, name");
 
   if (error) {
@@ -282,10 +305,10 @@ async function main(): Promise<void> {
   console.log("=== TurboFashion Index :: Trends ingestion ===");
 
   const idByName = await seedEntities();
-  const startTime = startOfHistoryWindow();
+  const startTime = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
 
   console.log(
-    `\n[2/2] Fetching ${MONTHS_OF_HISTORY}-month search interest for ${ENTITIES.length} entities` +
+    `\n[2/2] Fetching ${MONTHS_OF_HISTORY}-month search interest for ${TRACKED_ENTITIES.length} entities` +
       ` (>= ${startTime.toISOString().slice(0, 10)})...`
   );
 
@@ -294,9 +317,9 @@ async function main(): Promise<void> {
   let failed = 0;
   let skipped = 0;
 
-  for (let i = 0; i < ENTITIES.length; i++) {
-    const entity = ENTITIES[i];
-    const position = `${String(i + 1).padStart(2, "0")}/${ENTITIES.length}`;
+  for (let i = 0; i < TRACKED_ENTITIES.length; i++) {
+    const entity = TRACKED_ENTITIES[i];
+    const position = `${String(i + 1).padStart(2, "0")}/${TRACKED_ENTITIES.length}`;
     const entityId = idByName.get(entity.name);
 
     if (!entityId) {
@@ -334,7 +357,7 @@ async function main(): Promise<void> {
 
     // Humanized jitter: only pause when we actually hit the network, and never
     // after the final entity.
-    if (fetchedThisEntity && i < ENTITIES.length - 1) {
+    if (fetchedThisEntity && i < TRACKED_ENTITIES.length - 1) {
       const delay = randomJitterMs();
       console.log(`      … waiting ${(delay / 1000).toFixed(1)}s (jitter)`);
       await sleep(delay);
