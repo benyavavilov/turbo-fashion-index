@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download, Search } from "lucide-react";
+import { Download } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -15,6 +15,7 @@ import {
 
 import type { EntityCategory, EntityMeta, TrendDatum } from "@/app/actions";
 import { getTrendData } from "@/app/actions";
+import EntitySelector from "@/app/components/entity-selector";
 import EntityLogo from "@/app/components/entity-logo";
 import { getBrandTicker } from "@/lib/brand-assets";
 import type { ChartContext, Timeframe } from "@/lib/chart-context";
@@ -331,130 +332,6 @@ function ChartTooltip({
   );
 }
 
-function EntityPicker({
-  entities,
-  selected,
-  onToggle,
-  onSelectAll,
-  onClear,
-  search,
-  onSearchChange,
-}: {
-  entities: EntityMeta[];
-  selected: Set<string>;
-  onToggle: (name: string) => void;
-  onSelectAll: (category: EntityCategory) => void;
-  onClear: () => void;
-  search: string;
-  onSearchChange: (q: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-
-  const grouped = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const filter = (list: EntityMeta[]) =>
-      list.filter((e) => !q || e.name.toLowerCase().includes(q));
-
-    return {
-      brand: filter(entities.filter((e) => e.category === "brand")),
-      trend: filter(entities.filter((e) => e.category === "trend")),
-    };
-  }, [entities, search]);
-
-  const renderGroup = (label: string, list: EntityMeta[], category: EntityCategory) => {
-    if (list.length === 0) return null;
-    return (
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-neutral-500">
-            {label}
-          </p>
-          <button
-            type="button"
-            onClick={() => onSelectAll(category)}
-            className="text-[10px] text-neutral-500 transition-colors hover:text-neutral-300"
-          >
-            Select all
-          </button>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {list.map((entity) => {
-            const active = selected.has(entity.name);
-            return (
-              <button
-                key={entity.name}
-                type="button"
-                onClick={() => onToggle(entity.name)}
-                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all ${
-                  active
-                    ? "border-indigo-500/40 bg-indigo-500/15 text-indigo-200 shadow-[0_0_12px_rgba(99,102,241,0.15)]"
-                    : "border-neutral-800 bg-neutral-900/40 text-neutral-500 hover:border-neutral-700 hover:text-neutral-300"
-                }`}
-              >
-                <EntityLogo
-                  name={entity.name}
-                  category={entity.category}
-                  size={14}
-                />
-                {entity.name}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="rounded-lg border border-neutral-800/80 bg-neutral-950/50">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
-      >
-        <div>
-          <p className="text-xs font-medium text-neutral-300">Entity Comparator</p>
-          <p className="text-[11px] text-neutral-500">
-            {selected.size} of {entities.length} series selected
-          </p>
-        </div>
-        <ChevronDown
-          className={`h-4 w-4 text-neutral-500 transition-transform ${expanded ? "rotate-180" : ""}`}
-        />
-      </button>
-
-      {expanded && (
-        <div className="space-y-4 border-t border-neutral-800/80 px-4 pb-4 pt-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex min-w-[200px] flex-1 items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/60 px-3 py-1.5">
-              <Search className="h-3.5 w-3.5 text-neutral-500" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => onSearchChange(e.target.value)}
-                placeholder="Filter entities…"
-                className="w-full bg-transparent text-sm text-neutral-200 placeholder:text-neutral-600 outline-none"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={onClear}
-              className="rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
-            >
-              Clear
-            </button>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {renderGroup("Brands", grouped.brand, "brand")}
-            {renderGroup("Cultural Trends", grouped.trend, "trend")}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function RatioAnalysisPanel({
   entities,
   numerator,
@@ -582,7 +459,6 @@ export default function TrendExplorer({
   const [ratioMode, setRatioMode] = useState(false);
   const [numerator, setNumerator] = useState(ratioDefaults.numerator);
   const [denominator, setDenominator] = useState(ratioDefaults.denominator);
-  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() =>
     defaultSelection(allEntities)
   );
@@ -671,26 +547,44 @@ export default function TrendExplorer({
   const [stockByDate, setStockByDate] = useState<Map<string, number>>(
     () => new Map()
   );
+  const [stockError, setStockError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!showStockOverlay || !stockTicker || ratioMode) {
       setStockByDate(new Map());
+      setStockError(null);
       return;
     }
 
     let cancelled = false;
+    setStockError(null);
+
     fetch(
       `/api/finance?ticker=${encodeURIComponent(stockTicker)}&timeframe=${timeframe}`
     )
-      .then((res) => res.json())
-      .then((data: { quotes?: { date: string; close: number }[] }) => {
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error ?? `Finance API error (${res.status})`);
+        }
+        return data as { quotes?: { date: string; close: number }[] };
+      })
+      .then((data) => {
         if (cancelled) return;
         const map = new Map<string, number>();
         for (const q of data.quotes ?? []) map.set(q.date, q.close);
         setStockByDate(map);
+        if (map.size === 0) {
+          setStockError(`No price data returned for ${stockTicker}.`);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setStockByDate(new Map());
+      .catch((err) => {
+        if (!cancelled) {
+          setStockByDate(new Map());
+          setStockError(
+            err instanceof Error ? err.message : "Failed to load stock overlay"
+          );
+        }
       });
 
     return () => {
@@ -750,11 +644,12 @@ export default function TrendExplorer({
   const stockDomain = useMemo((): [number, number] => {
     const values = chartData
       .map((row) => row[STOCK_KEY])
-      .filter((v): v is number => typeof v === "number");
+      .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
     if (values.length === 0) return [0, 100];
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const pad = (max - min) * 0.08 || 1;
+    const span = max - min || max * 0.1 || 10;
+    const pad = span * 0.1;
     return [Math.max(0, min - pad), max + pad];
   }, [chartData]);
 
@@ -794,24 +689,17 @@ export default function TrendExplorer({
     onChartContextChange,
   ]);
 
-  const toggleEntity = (name: string) => {
+  const addEntity = (name: string) => {
+    setSelected((prev) => new Set(prev).add(name));
+  };
+
+  const removeEntity = (name: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      next.delete(name);
       return next;
     });
   };
-
-  const selectAllInCategory = (category: EntityCategory) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      allEntities.filter((e) => e.category === category).forEach((e) => next.add(e.name));
-      return next;
-    });
-  };
-
-  const clearSelection = () => setSelected(new Set());
 
   return (
     <section className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-5">
@@ -939,18 +827,30 @@ export default function TrendExplorer({
         />
       </div>
 
-      {/* Multi-select entity picker */}
-      <div className={`mb-5 ${ratioMode ? "opacity-40 pointer-events-none" : ""}`}>
-        <EntityPicker
-          entities={allEntities}
-          selected={selected}
-          onToggle={toggleEntity}
-          onSelectAll={selectAllInCategory}
-          onClear={clearSelection}
-          search={search}
-          onSearchChange={setSearch}
-        />
-      </div>
+      {/* Entity selector */}
+      <EntitySelector
+        entities={allEntities}
+        selected={selected}
+        onAdd={addEntity}
+        onRemove={removeEntity}
+        disabled={ratioMode}
+      />
+
+      {showStockOverlay && !ratioMode && stockTicker && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <span
+            className="h-2 w-6 rounded-sm"
+            style={{ backgroundColor: STOCK_COLOR }}
+          />
+          <span className="text-xs font-medium text-amber-200">
+            Overlay: ${stockTicker} Stock Price
+            {stockOverlayEntity ? ` · ${stockOverlayEntity}` : ""}
+          </span>
+          {stockError && (
+            <span className="text-xs text-rose-400">({stockError})</span>
+          )}
+        </div>
+      )}
 
       {/* Chart */}
       <div className="h-96 w-full rounded-lg border border-neutral-800/60 bg-neutral-950/30 p-2">
@@ -974,7 +874,7 @@ export default function TrendExplorer({
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
-              margin={{ top: 12, right: showStockOverlay && !ratioMode ? 48 : 16, left: ratioMode ? 4 : 0, bottom: 4 }}
+              margin={{ top: 12, right: showStockOverlay && !ratioMode ? 56 : 16, left: ratioMode ? 4 : 0, bottom: 4 }}
             >
               <defs>
                 <linearGradient id="stockGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1016,8 +916,8 @@ export default function TrendExplorer({
                   stroke={STOCK_COLOR}
                   fontSize={10}
                   tickLine={false}
-                  axisLine={false}
-                  width={44}
+                  axisLine={{ stroke: STOCK_COLOR, strokeOpacity: 0.35 }}
+                  width={52}
                   tickFormatter={(v) => `$${Number(v).toFixed(0)}`}
                 />
               )}
@@ -1042,12 +942,14 @@ export default function TrendExplorer({
                   yAxisId="right"
                   type="monotone"
                   dataKey={STOCK_KEY}
-                  name={`${stockOverlayEntity} (${stockTicker})`}
+                  name={`$${stockTicker} Stock Price`}
                   stroke={STOCK_COLOR}
-                  strokeWidth={1}
+                  strokeWidth={2}
                   fill="url(#stockGradient)"
+                  fillOpacity={1}
                   connectNulls
                   dot={false}
+                  activeDot={{ r: 4, fill: STOCK_COLOR }}
                   isAnimationActive={false}
                 />
               )}

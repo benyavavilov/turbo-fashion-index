@@ -20,11 +20,31 @@ export default function AiAnalyst({
       new DefaultChatTransport({
         api: "/api/chat",
         body: { chartContext },
+        fetch: async (input, init) => {
+          const res = await fetch(input, init);
+          if (!res.ok) {
+            let message = `Chat request failed (${res.status})`;
+            const text = await res.text();
+            try {
+              const data = JSON.parse(text) as { error?: string };
+              message = data.error ?? text ?? message;
+            } catch {
+              if (text) message = text;
+            }
+            throw new Error(message);
+          }
+          return res;
+        },
       }),
     [chartContext]
   );
 
-  const { messages, sendMessage, status, error } = useChat({ transport });
+  const { messages, sendMessage, status, error } = useChat({
+    transport,
+    onError: (err) => {
+      console.error("[AI Analyst]", err);
+    },
+  });
 
   const isBusy = status === "submitted" || status === "streaming";
 
@@ -101,7 +121,9 @@ export default function AiAnalyst({
               </div>
             ))}
             {error && (
-              <p className="text-xs text-rose-400">{error.message}</p>
+              <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                {error.message}
+              </div>
             )}
           </div>
 

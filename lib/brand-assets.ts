@@ -21,6 +21,7 @@ export const BRAND_DOMAINS: Record<string, string> = {
   "Ralph Lauren": "ralphlauren.com",
   Shein: "shein.com",
   Supreme: "supreme.com",
+  Hypebeast: "hypebeast.com",
   "The North Face": "thenorthface.com",
   Zara: "zara.com",
 };

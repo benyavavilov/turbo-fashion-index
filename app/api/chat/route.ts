@@ -7,6 +7,13 @@ import type { ChartContext } from "@/lib/chart-context";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+function errorResponse(message: string, status = 500) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function buildSystemPrompt(ctx: ChartContext | undefined): string {
   const contextJson = ctx
     ? JSON.stringify(ctx, null, 2)
@@ -36,36 +43,48 @@ export async function POST(req: Request) {
   const openaiKey = process.env.OPENAI_API_KEY;
 
   if (!googleKey && !openaiKey) {
-    return new Response(
-      JSON.stringify({
-        error:
-          "Set GOOGLE_GENERATIVE_AI_API_KEY or OPENAI_API_KEY in .env.local",
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+    return errorResponse(
+      "Set GOOGLE_GENERATIVE_AI_API_KEY or OPENAI_API_KEY in .env.local"
     );
   }
 
+  let body: { messages?: UIMessage[]; chartContext?: ChartContext };
   try {
-    const body = await req.json();
-    const messages = (body.messages ?? []) as UIMessage[];
-    const chartContext = body.chartContext as ChartContext | undefined;
+    body = await req.json();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return errorResponse(`Invalid request body: ${message}`, 400);
+  }
 
+  const messages = body.messages ?? [];
+  const chartContext = body.chartContext;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return errorResponse("At least one message is required.", 400);
+  }
+
+  try {
     const model = googleKey
       ? google("gemini-2.0-flash")
       : openai("gpt-4o-mini");
 
+    const modelMessages = await convertToModelMessages(messages);
+
     const result = streamText({
       model,
       system: buildSystemPrompt(chartContext),
-      messages: await convertToModelMessages(messages),
+      messages: modelMessages,
     });
 
     return result.toUIMessageStreamResponse();
   } catch (err) {
     console.error("[api/chat]", err);
-    return new Response(JSON.stringify({ error: "Chat request failed" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    const message =
+      err instanceof Error
+        ? `${err.name}: ${err.message}`
+        : typeof err === "string"
+          ? err
+          : JSON.stringify(err);
+    return errorResponse(message);
   }
 }

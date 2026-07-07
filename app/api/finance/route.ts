@@ -43,9 +43,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ticker, quotes, stockKey: STOCK_KEY });
   } catch (err) {
     console.error("[api/finance]", err);
-    return NextResponse.json(
-      { error: "Failed to fetch stock data" },
-      { status: 502 }
-    );
+    const message =
+      err instanceof Error ? err.message : "Failed to fetch stock data";
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

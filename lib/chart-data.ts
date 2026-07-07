@@ -66,8 +66,36 @@ export function mergeStockPrices(
   pricesByDate: Map<string, number>,
   stockKey = "__stock"
 ): TrendDatum[] {
+  if (pricesByDate.size === 0) return data;
+
+  const stockEntries = Array.from(pricesByDate.entries()).sort(([a], [b]) =>
+    a.localeCompare(b)
+  );
+
+  const findNearestPrice = (date: string): number | null => {
+    const exact = pricesByDate.get(date);
+    if (exact != null) return exact;
+
+    const targetTs = new Date(`${date}T12:00:00`).getTime();
+    if (Number.isNaN(targetTs)) return null;
+
+    let best: { diff: number; price: number } | null = null;
+    const windowMs = 7 * 24 * 60 * 60 * 1000;
+
+    for (const [stockDate, price] of stockEntries) {
+      const stockTs = new Date(`${stockDate}T12:00:00`).getTime();
+      if (Number.isNaN(stockTs)) continue;
+      const diff = Math.abs(stockTs - targetTs);
+      if (diff <= windowMs && (!best || diff < best.diff)) {
+        best = { diff, price };
+      }
+    }
+
+    return best?.price ?? null;
+  };
+
   return data.map((row) => ({
     ...row,
-    [stockKey]: pricesByDate.get(row.date) ?? null,
+    [stockKey]: findNearestPrice(row.date),
   }));
 }
