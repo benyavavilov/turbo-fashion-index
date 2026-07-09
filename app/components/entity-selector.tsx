@@ -1,22 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, X } from "lucide-react";
+import { Activity, LineChart, Plus, Search, X } from "lucide-react";
 
 import type { EntityMeta } from "@/app/actions";
 import EntityLogo from "@/app/components/entity-logo";
+import { getBrandTicker } from "@/lib/brand-assets";
 
 export default function EntitySelector({
   entities,
   selected,
+  smaEnabled,
+  stockEnabled,
   onAdd,
   onRemove,
+  onToggleSma,
+  onToggleStock,
   disabled = false,
 }: {
   entities: EntityMeta[];
   selected: Set<string>;
+  smaEnabled: Set<string>;
+  stockEnabled: Set<string>;
   onAdd: (name: string) => void;
   onRemove: (name: string) => void;
+  onToggleSma: (name: string) => void;
+  onToggleStock: (name: string) => void;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -53,38 +62,75 @@ export default function EntitySelector({
       ref={rootRef}
       className={`mb-4 space-y-3 ${disabled ? "pointer-events-none opacity-40" : ""}`}
     >
-      {/* Selected entity tags */}
       <div className="flex min-h-[40px] flex-wrap items-center gap-2">
         {selectedList.length === 0 ? (
           <span className="text-sm text-neutral-600">
             No entities selected — add one to plot.
           </span>
         ) : (
-          selectedList.map((entity) => (
-            <span
-              key={entity.name}
-              className="inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 py-1 pl-1.5 pr-2 text-sm text-indigo-100"
-            >
-              <EntityLogo
-                name={entity.name}
-                category={entity.category}
-                size={32}
-              />
-              <span className="font-medium">{entity.name}</span>
-              <button
-                type="button"
-                onClick={() => onRemove(entity.name)}
-                className="rounded-full p-0.5 text-indigo-300/80 transition hover:bg-indigo-500/20 hover:text-white"
-                aria-label={`Remove ${entity.name}`}
+          selectedList.map((entity) => {
+            const hasTicker = Boolean(getBrandTicker(entity.name));
+            const smaOn = smaEnabled.has(entity.name);
+            const stockOn = stockEnabled.has(entity.name);
+
+            return (
+              <span
+                key={entity.name}
+                className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 py-1 pl-1.5 pr-1.5 text-sm text-indigo-100"
               >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </span>
-          ))
+                <EntityLogo
+                  name={entity.name}
+                  category={entity.category}
+                  size={28}
+                />
+                <span className="font-medium">{entity.name}</span>
+
+                <button
+                  type="button"
+                  onClick={() => onToggleSma(entity.name)}
+                  title="90-day moving average"
+                  aria-label={`${smaOn ? "Hide" : "Show"} 90-day SMA for ${entity.name}`}
+                  aria-pressed={smaOn}
+                  className={`rounded-full p-1 transition ${
+                    smaOn
+                      ? "bg-indigo-500/30 text-indigo-200 ring-1 ring-indigo-400/40"
+                      : "text-indigo-300/50 hover:bg-indigo-500/15 hover:text-indigo-200"
+                  }`}
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                </button>
+
+                {hasTicker && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleStock(entity.name)}
+                    title="Stock price overlay"
+                    aria-label={`${stockOn ? "Hide" : "Show"} stock overlay for ${entity.name}`}
+                    aria-pressed={stockOn}
+                    className={`rounded-full p-1 transition ${
+                      stockOn
+                        ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/40"
+                        : "text-indigo-300/50 hover:bg-amber-500/10 hover:text-amber-200"
+                    }`}
+                  >
+                    <LineChart className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onRemove(entity.name)}
+                  className="rounded-full p-0.5 text-indigo-300/80 transition hover:bg-indigo-500/20 hover:text-white"
+                  aria-label={`Remove ${entity.name}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            );
+          })
         )}
       </div>
 
-      {/* Add entity control */}
       <div className="relative inline-block">
         <button
           type="button"

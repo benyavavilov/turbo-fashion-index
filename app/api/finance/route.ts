@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import yahooFinance from "yahoo-finance2";
+import YahooFinance from "yahoo-finance2";
 
 export const runtime = "nodejs";
 
+const yahooFinance = new YahooFinance();
 const STOCK_KEY = "__stock";
 
 function periodStart(timeframe: string): Date {

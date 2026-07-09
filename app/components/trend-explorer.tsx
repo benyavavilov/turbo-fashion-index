@@ -20,8 +20,10 @@ import EntityLogo from "@/app/components/entity-logo";
 import { getBrandTicker } from "@/lib/brand-assets";
 import type { ChartContext, Timeframe } from "@/lib/chart-context";
 import {
+  consolidateRowsByDate,
+  filterByTimeframe,
   groupAndAlignChartData,
-  mergeStockPrices,
+  mergeStockPricesForEntities,
   normalizeDateString,
 } from "@/lib/chart-data";
 
@@ -47,8 +49,9 @@ const SMA_WINDOW_DAYS = 90;
 const SMA_KEY_SUFFIX = "__sma";
 const RATIO_KEY = "ratio";
 const RATIO_COLOR = "#2dd4bf"; // neon teal
-const STOCK_KEY = "__stock";
 const STOCK_COLOR = "#fbbf24"; // neon gold
+/** Always fetch full stock history; UI timeframe is applied after merge. */
+const STOCK_FETCH_TIMEFRAME = "5Y";
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
   { id: "6M", label: "6 Months" },
@@ -88,30 +91,20 @@ function smaKey(name: string): string {
   return `${name}${SMA_KEY_SUFFIX}`;
 }
 
+function stockKey(name: string): string {
+  return `${name}__stock`;
+}
+
 function isSmaKey(key: string): boolean {
   return key.endsWith(SMA_KEY_SUFFIX);
 }
 
+function isStockKey(key: string): boolean {
+  return key.endsWith("__stock");
+}
+
 function displayName(key: string): string {
   return isSmaKey(key) ? `${key.replace(SMA_KEY_SUFFIX, "")} · 90d SMA` : key;
-}
-
-function cutoffDate(timeframe: Timeframe): Date {
-  const d = new Date();
-  if (timeframe === "6M") d.setMonth(d.getMonth() - 6);
-  else if (timeframe === "1Y") d.setFullYear(d.getFullYear() - 1);
-  else d.setFullYear(d.getFullYear() - 5);
-  return d;
-}
-
-function filterByTimeframe(data: TrendDatum[], timeframe: Timeframe): TrendDatum[] {
-  const cutoff = cutoffDate(timeframe);
-  const cutoffTs = cutoff.getTime();
-
-  return data.filter((row) => {
-    const ts = new Date(row.date).getTime();
-    return !Number.isNaN(ts) && ts >= cutoffTs;
-  });
 }
 
 /**
@@ -272,7 +265,11 @@ function ChartTooltip({
 }) {
   if (!active || !payload?.length) return null;
 
-  const raw = payload.filter((e) => !isSmaKey(String(e.dataKey ?? e.name)));
+  const raw = payload.filter(
+    (e) =>
+      !isSmaKey(String(e.dataKey ?? e.name)) &&
+      !isStockKey(String(e.dataKey ?? e.name))
+  );
   const smoothed = payload.filter((e) => isSmaKey(String(e.dataKey ?? e.name)));
 
   return (
@@ -454,8 +451,8 @@ export default function TrendExplorer({
   const ratioDefaults = useMemo(() => defaultRatioPair(allEntities), [allEntities]);
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
-  const [showSMA, setShowSMA] = useState(false);
-  const [showStockOverlay, setShowStockOverlay] = useState(false);
+  const [smaEnabled, setSmaEnabled] = useState<Set<string>>(() => new Set());
+  const [stockEnabled, setStockEnabled] = useState<Set<string>>(() => new Set());
   const [ratioMode, setRatioMode] = useState(false);
   const [numerator, setNumerator] = useState(ratioDefaults.numerator);
   const [denominator, setDenominator] = useState(ratioDefaults.denominator);
@@ -535,77 +532,114 @@ export default function TrendExplorer({
     return map;
   }, [allEntities]);
 
-  const stockOverlayEntity = useMemo(() => {
-    if (ratioMode) return getBrandTicker(numerator) ? numerator : undefined;
-    return selectedList.find((name) => getBrandTicker(name));
-  }, [ratioMode, numerator, selectedList]);
-
-  const stockTicker = stockOverlayEntity
-    ? getBrandTicker(stockOverlayEntity)
-    : undefined;
-
-  const [stockByDate, setStockByDate] = useState<Map<string, number>>(
-    () => new Map()
+  const smaEntities = useMemo(
+    () => selectedList.filter((name) => smaEnabled.has(name)),
+    [selectedList, smaEnabled]
   );
-  const [stockError, setStockError] = useState<string | null>(null);
+
+  const stockEntities = useMemo(() => {
+    if (ratioMode) return [];
+    return selectedList.filter(
+      (name) => stockEnabled.has(name) && Boolean(getBrandTicker(name))
+    );
+  }, [selectedList, stockEnabled, ratioMode]);
+
+  const [stockByEntity, setStockByEntity] = useState<
+    Record<string, Map<string, number>>
+  >({});
+  const [stockErrors, setStockErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!showStockOverlay || !stockTicker || ratioMode) {
-      setStockByDate(new Map());
-      setStockError(null);
+    if (stockEntities.length === 0) {
+      setStockByEntity({});
+      setStockErrors({});
       return;
     }
 
     let cancelled = false;
-    setStockError(null);
+    setStockErrors({});
 
-    fetch(
-      `/api/finance?ticker=${encodeURIComponent(stockTicker)}&timeframe=${timeframe}`
-    )
-      .then(async (res) => {
-        const data = await res.json();
+    Promise.allSettled(
+      stockEntities.map(async (name) => {
+        const ticker = getBrandTicker(name)!;
+        const res = await fetch(
+          `/api/finance?ticker=${encodeURIComponent(ticker)}&timeframe=${STOCK_FETCH_TIMEFRAME}`
+        );
+        const data = (await res.json()) as {
+          error?: string;
+          quotes?: { date: string; close: number }[];
+        };
         if (!res.ok) {
           throw new Error(data.error ?? `Finance API error (${res.status})`);
         }
-        return data as { quotes?: { date: string; close: number }[] };
-      })
-      .then((data) => {
-        if (cancelled) return;
         const map = new Map<string, number>();
         for (const q of data.quotes ?? []) map.set(q.date, q.close);
-        setStockByDate(map);
-        if (map.size === 0) {
-          setStockError(`No price data returned for ${stockTicker}.`);
-        }
+        return { name, ticker, map };
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setStockByDate(new Map());
-          setStockError(
-            err instanceof Error ? err.message : "Failed to load stock overlay"
-          );
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const byEntity: Record<string, Map<string, number>> = {};
+        const errors: Record<string, string> = {};
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+          const name = stockEntities[i];
+          if (result.status === "fulfilled") {
+            const { ticker, map } = result.value;
+            byEntity[name] = map;
+            if (map.size === 0) {
+              errors[name] = `No price data returned for ${ticker}.`;
+            }
+          } else {
+            errors[name] =
+              result.reason instanceof Error
+                ? result.reason.message
+                : "Failed to load stock overlay";
+          }
         }
+        setStockByEntity(byEntity);
+        setStockErrors(errors);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [showStockOverlay, stockTicker, timeframe, ratioMode]);
+  }, [stockEntities]);
 
-  const normalizedFiltered = useMemo(
+  const normalizedAll = useMemo(
     () =>
-      filterByTimeframe(sourceData, timeframe).map((row) => ({
+      sourceData.map((row) => ({
         ...row,
         date: normalizeDateString(String(row.date)),
       })),
-    [sourceData, timeframe]
+    [sourceData]
+  );
+
+  const alignedAll = useMemo(() => {
+    const series = ratioMode
+      ? [numerator, denominator].filter(Boolean)
+      : selectedList;
+    const extra = !ratioMode ? smaEntities.map(smaKey) : [];
+    return groupAndAlignChartData(normalizedAll, series, extra);
+  }, [
+    normalizedAll,
+    selectedList,
+    ratioMode,
+    numerator,
+    denominator,
+    smaEntities,
+  ]);
+
+  const normalizedFiltered = useMemo(
+    () => filterByTimeframe(normalizedAll, timeframe),
+    [normalizedAll, timeframe]
   );
 
   const alignedFiltered = useMemo(() => {
     const series = ratioMode
       ? [numerator, denominator].filter(Boolean)
       : selectedList;
-    const extra = !ratioMode && showSMA ? selectedList.map(smaKey) : [];
+    const extra = !ratioMode ? smaEntities.map(smaKey) : [];
     return groupAndAlignChartData(normalizedFiltered, series, extra);
   }, [
     normalizedFiltered,
@@ -613,7 +647,7 @@ export default function TrendExplorer({
     ratioMode,
     numerator,
     denominator,
-    showSMA,
+    smaEntities,
   ]);
 
   const ratioData = useMemo(() => {
@@ -624,17 +658,51 @@ export default function TrendExplorer({
   }, [alignedFiltered, ratioMode, numerator, denominator]);
 
   const chartDataRaw = useMemo(() => {
-    if (ratioMode) return ratioData;
-    if (!showSMA || selectedList.length === 0) return alignedFiltered;
-    return applySMA(alignedFiltered, selectedList);
-  }, [ratioMode, ratioData, alignedFiltered, showSMA, selectedList]);
+    if (ratioMode) return consolidateRowsByDate(ratioData);
 
-  const chartData = useMemo(() => {
-    if (!showStockOverlay || ratioMode || stockByDate.size === 0) {
-      return chartDataRaw;
+    const withSma =
+      smaEntities.length === 0
+        ? alignedAll
+        : applySMA(alignedAll, smaEntities);
+
+    const stockMaps: Record<string, Map<string, number>> = {};
+    for (const name of stockEntities) {
+      const prices = stockByEntity[name];
+      if (prices instanceof Map && prices.size > 0) {
+        stockMaps[name] = prices;
+      }
     }
-    return mergeStockPrices(chartDataRaw, stockByDate, STOCK_KEY);
-  }, [chartDataRaw, showStockOverlay, stockByDate, ratioMode]);
+
+    const merged =
+      Object.keys(stockMaps).length > 0
+        ? mergeStockPricesForEntities(withSma, stockMaps, stockKey)
+        : consolidateRowsByDate(withSma);
+
+    return filterByTimeframe(merged, timeframe);
+  }, [
+    ratioMode,
+    ratioData,
+    alignedAll,
+    smaEntities,
+    stockEntities,
+    stockByEntity,
+    timeframe,
+  ]);
+
+  const chartData = chartDataRaw;
+
+  const activeStockEntities = useMemo(
+    () =>
+      stockEntities.filter((name) =>
+        chartData.some((row) => {
+          const value = row[stockKey(name)];
+          return typeof value === "number" && !Number.isNaN(value);
+        })
+      ),
+    [stockEntities, chartData]
+  );
+
+  const hasStockSeries = activeStockEntities.length > 0;
 
   const yDomain = useMemo((): [number, number] => {
     if (ratioMode) return ratioDomain(ratioData);
@@ -642,16 +710,22 @@ export default function TrendExplorer({
   }, [ratioMode, ratioData]);
 
   const stockDomain = useMemo((): [number, number] => {
-    const values = chartData
-      .map((row) => row[STOCK_KEY])
-      .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+    if (!hasStockSeries) return [0, 100];
+    const values: number[] = [];
+    for (const name of activeStockEntities) {
+      const key = stockKey(name);
+      for (const row of chartData) {
+        const value = row[key];
+        if (typeof value === "number" && !Number.isNaN(value)) values.push(value);
+      }
+    }
     if (values.length === 0) return [0, 100];
     const min = Math.min(...values);
     const max = Math.max(...values);
     const span = max - min || max * 0.1 || 10;
     const pad = span * 0.1;
     return [Math.max(0, min - pad), max + pad];
-  }, [chartData]);
+  }, [chartData, hasStockSeries, activeStockEntities]);
 
   const ratioValid =
     ratioMode &&
@@ -660,17 +734,20 @@ export default function TrendExplorer({
     numerator !== denominator;
 
   useEffect(() => {
+    const primaryStock = activeStockEntities[0];
     onChartContextChange?.({
       timeframe,
       ratioMode,
       numerator: ratioMode ? numerator : undefined,
       denominator: ratioMode ? denominator : undefined,
       selectedEntities: selectedList,
-      showSMA,
-      showStockOverlay,
-      stockOverlayEntity,
-      stockTicker,
-      recentDataPoints: chartData.slice(-12),
+      showSMA: smaEntities.length > 0,
+      smaEntities,
+      showStockOverlay: activeStockEntities.length > 0,
+      stockOverlayEntity: primaryStock,
+      stockTicker: primaryStock ? getBrandTicker(primaryStock) : undefined,
+      stockEntities: activeStockEntities,
+      visibleChartData: chartData,
       observationCount: chartData.length,
       isLive,
     });
@@ -680,14 +757,30 @@ export default function TrendExplorer({
     numerator,
     denominator,
     selectedList,
-    showSMA,
-    showStockOverlay,
-    stockOverlayEntity,
-    stockTicker,
+    smaEntities,
+    activeStockEntities,
     chartData,
     isLive,
     onChartContextChange,
   ]);
+
+  const toggleSma = (name: string) => {
+    setSmaEnabled((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleStock = (name: string) => {
+    setStockEnabled((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   const addEntity = (name: string) => {
     setSelected((prev) => new Set(prev).add(name));
@@ -695,6 +788,16 @@ export default function TrendExplorer({
 
   const removeEntity = (name: string) => {
     setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    setSmaEnabled((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    setStockEnabled((prev) => {
       const next = new Set(prev);
       next.delete(name);
       return next;
@@ -753,60 +856,12 @@ export default function TrendExplorer({
           ))}
         </div>
 
-        <label
-          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-1.5 ${
-            ratioMode ? "opacity-40" : ""
-          }`}
-        >
-          <span className="text-xs text-neutral-400">Show Stock Overlay</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={showStockOverlay}
-            disabled={ratioMode || !stockTicker}
-            onClick={() => setShowStockOverlay((v) => !v)}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              showStockOverlay && !ratioMode ? "bg-amber-500/80" : "bg-neutral-700"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                showStockOverlay && !ratioMode ? "translate-x-4" : "translate-x-0"
-              }`}
-            />
-          </button>
-        </label>
-
-        <label
-          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-1.5 ${
-            ratioMode ? "opacity-40" : ""
-          }`}
-        >
-          <span className="text-xs text-neutral-400">90-Day Moving Average</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={showSMA}
-            disabled={ratioMode}
-            onClick={() => setShowSMA((v) => !v)}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              showSMA && !ratioMode ? "bg-indigo-500/80" : "bg-neutral-700"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                showSMA && !ratioMode ? "translate-x-4" : "translate-x-0"
-              }`}
-            />
-          </button>
-        </label>
-
         <span className="text-[11px] text-neutral-600">
           {ratioMode
             ? `${ratioData.length} ratio observations`
             : `${chartData.length} observations · ${selectedList.length} series`}
-          {showStockOverlay && stockTicker && !ratioMode
-            ? ` · ${stockTicker} overlay`
+          {activeStockEntities.length > 0 && !ratioMode
+            ? ` · ${activeStockEntities.length} stock overlay${activeStockEntities.length > 1 ? "s" : ""}`
             : ""}
         </span>
       </div>
@@ -822,7 +877,10 @@ export default function TrendExplorer({
           onDenominatorChange={setDenominator}
           onRatioModeChange={(enabled) => {
             setRatioMode(enabled);
-            if (enabled) setShowSMA(false);
+            if (enabled) {
+              setSmaEnabled(new Set());
+              setStockEnabled(new Set());
+            }
           }}
         />
       </div>
@@ -831,24 +889,43 @@ export default function TrendExplorer({
       <EntitySelector
         entities={allEntities}
         selected={selected}
+        smaEnabled={smaEnabled}
+        stockEnabled={stockEnabled}
         onAdd={addEntity}
         onRemove={removeEntity}
+        onToggleSma={toggleSma}
+        onToggleStock={toggleStock}
         disabled={ratioMode}
       />
 
-      {showStockOverlay && !ratioMode && stockTicker && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-          <span
-            className="h-2 w-6 rounded-sm"
-            style={{ backgroundColor: STOCK_COLOR }}
-          />
-          <span className="text-xs font-medium text-amber-200">
-            Overlay: ${stockTicker} Stock Price
-            {stockOverlayEntity ? ` · ${stockOverlayEntity}` : ""}
-          </span>
-          {stockError && (
-            <span className="text-xs text-rose-400">({stockError})</span>
+      {activeStockEntities.length > 0 && !ratioMode && (
+        <div className="mb-3 space-y-2">
+          {stockErrors._fetch && (
+            <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs text-rose-400">
+              {stockErrors._fetch}
+            </div>
           )}
+          {activeStockEntities.map((name) => {
+            const ticker = getBrandTicker(name);
+            const error = stockErrors[name];
+            return (
+              <div
+                key={name}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+              >
+                <span
+                  className="h-2 w-6 rounded-sm"
+                  style={{ backgroundColor: colorByName.get(name) ?? STOCK_COLOR }}
+                />
+                <span className="text-xs font-medium text-amber-200">
+                  Overlay: ${ticker} Stock Price · {name}
+                </span>
+                {error && (
+                  <span className="text-xs text-rose-400">({error})</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -874,14 +951,8 @@ export default function TrendExplorer({
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
-              margin={{ top: 12, right: showStockOverlay && !ratioMode ? 56 : 16, left: ratioMode ? 4 : 0, bottom: 4 }}
+              margin={{ top: 12, right: hasStockSeries && !ratioMode ? 56 : 16, left: ratioMode ? 4 : 0, bottom: 4 }}
             >
-              <defs>
-                <linearGradient id="stockGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={STOCK_COLOR} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={STOCK_COLOR} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
               <CartesianGrid
                 strokeDasharray="3 3"
                 stroke="#262626"
@@ -908,7 +979,7 @@ export default function TrendExplorer({
                   ratioMode ? Number(v).toFixed(1) : String(v)
                 }
               />
-              {showStockOverlay && !ratioMode && stockTicker && (
+              {hasStockSeries && !ratioMode && (
                 <YAxis
                   yAxisId="right"
                   orientation="right"
@@ -937,22 +1008,28 @@ export default function TrendExplorer({
                   cursor={{ stroke: "#404040", strokeWidth: 1 }}
                 />
               )}
-              {showStockOverlay && !ratioMode && stockTicker && (
-                <Area
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey={STOCK_KEY}
-                  name={`$${stockTicker} Stock Price`}
-                  stroke={STOCK_COLOR}
-                  strokeWidth={2}
-                  fill="url(#stockGradient)"
-                  fillOpacity={1}
-                  connectNulls
-                  dot={false}
-                  activeDot={{ r: 4, fill: STOCK_COLOR }}
-                  isAnimationActive={false}
-                />
-              )}
+              {activeStockEntities.map((name) => {
+                const ticker = getBrandTicker(name);
+                const key = stockKey(name);
+                const stroke = colorByName.get(name) ?? STOCK_COLOR;
+                return (
+                  <Area
+                    key={key}
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey={key}
+                    name={`$${ticker} Stock · ${name}`}
+                    stroke={stroke}
+                    strokeWidth={2}
+                    fill={stroke}
+                    fillOpacity={0.12}
+                    connectNulls
+                    dot={false}
+                    activeDot={{ r: 4, fill: stroke }}
+                    isAnimationActive={false}
+                  />
+                );
+              })}
               {ratioMode ? (
                 <Line
                   yAxisId="left"
@@ -981,23 +1058,22 @@ export default function TrendExplorer({
                       connectNulls
                     />
                   ))}
-                  {showSMA &&
-                    selectedList.map((name) => (
-                      <Line
-                        key={smaKey(name)}
-                        yAxisId="left"
-                        type="monotone"
-                        dataKey={smaKey(name)}
-                        name={smaKey(name)}
-                        stroke={colorByName.get(name)}
-                        strokeWidth={1.5}
-                        strokeDasharray="6 4"
-                        strokeOpacity={0.75}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        connectNulls
-                      />
-                    ))}
+                  {smaEntities.map((name) => (
+                    <Line
+                      key={smaKey(name)}
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey={smaKey(name)}
+                      name={smaKey(name)}
+                      stroke={colorByName.get(name)}
+                      strokeWidth={1.5}
+                      strokeDasharray="6 4"
+                      strokeOpacity={0.75}
+                      dot={false}
+                      activeDot={{ r: 3 }}
+                      connectNulls
+                    />
+                  ))}
                 </>
               )}
             </ComposedChart>
@@ -1033,7 +1109,7 @@ export default function TrendExplorer({
                   style={{ backgroundColor: colorByName.get(name) }}
                 />
                 <span className="font-mono text-neutral-300">{name}</span>
-                {showSMA && (
+                {smaEnabled.has(name) && (
                   <span className="text-neutral-600">
                     +{" "}
                     <span

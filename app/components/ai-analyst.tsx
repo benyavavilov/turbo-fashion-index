@@ -14,46 +14,90 @@ export default function AiAnalyst({
 }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  const [displayError, setDisplayError] = useState<string | null>(null);
 
+  // DefaultChatTransport sends the full messages[] history on every turn
+  // alongside the latest chartContext snapshot (full visible dataset).
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
         body: { chartContext },
         fetch: async (input, init) => {
-          const res = await fetch(input, init);
-          if (!res.ok) {
-            let message = `Chat request failed (${res.status})`;
-            const text = await res.text();
-            try {
-              const data = JSON.parse(text) as { error?: string };
-              message = data.error ?? text ?? message;
-            } catch {
-              if (text) message = text;
-            }
-            throw new Error(message);
+          let res: Response;
+          try {
+            res = await fetch(input, init);
+          } catch (err) {
+            const message =
+              err instanceof Error ? err.message : "Network request failed";
+            throw new Error(JSON.stringify({ error: message }));
           }
+
+          if (!res.ok) {
+            const text = await res.text();
+            let message = `Chat request failed (${res.status})`;
+
+            if (text) {
+              try {
+                const data = JSON.parse(text) as { error?: string };
+                message = data.error ?? text;
+              } catch {
+                message = text;
+              }
+            }
+
+            throw new Error(JSON.stringify({ error: message }));
+          }
+
           return res;
         },
       }),
     [chartContext]
   );
 
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status } = useChat({
     transport,
-    onError: (err) => {
-      console.error("[AI Analyst]", err);
+    onError: async (error) => {
+      try {
+        const serverError = JSON.parse(error.message) as { error?: string };
+        setDisplayError(serverError.error || "AI Route Failure");
+      } catch {
+        setDisplayError(error.message);
+      }
+      console.error("[AI Analyst]", error);
     },
   });
 
   const isBusy = status === "submitted" || status === "streaming";
+
+  const contextSummary = useMemo(() => {
+    if (!chartContext) return null;
+    const entities = chartContext.ratioMode
+      ? [chartContext.numerator, chartContext.denominator].filter(Boolean)
+      : chartContext.selectedEntities;
+    return `${entities.join(", ") || "no entities"} · ${chartContext.timeframe} · ${chartContext.observationCount} pts`;
+  }, [chartContext]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = input.trim();
     if (!text || isBusy) return;
     setInput("");
-    await sendMessage({ text });
+    setDisplayError(null);
+    try {
+      await sendMessage({ text });
+    } catch (error) {
+      if (error instanceof Error) {
+        try {
+          const serverError = JSON.parse(error.message) as { error?: string };
+          setDisplayError(serverError.error || "AI Route Failure");
+        } catch {
+          setDisplayError(error.message);
+        }
+      } else {
+        setDisplayError("AI Route Failure");
+      }
+    }
   };
 
   return (
@@ -77,9 +121,11 @@ export default function AiAnalyst({
                 <MessageSquare className="h-4 w-4 text-indigo-400" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-neutral-100">AI Economic Analyst</p>
+                <p className="text-sm font-semibold text-neutral-100">
+                  TurboFashion Lead Analyst
+                </p>
                 <p className="text-[10px] uppercase tracking-widest text-neutral-500">
-                  Context-aware · Live terminal
+                  {contextSummary ?? "Awaiting chart context"}
                 </p>
               </div>
             </div>
@@ -95,8 +141,12 @@ export default function AiAnalyst({
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
             {messages.length === 0 && (
               <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-400">
-                Ask about brand momentum, substitution ratios, or whether search interest
-                is leading equity moves for the entities on your chart.
+                Ask about momentum shifts, substitution ratios, or whether search
+                interest is leading equity moves. I see the{" "}
+                <strong className="text-neutral-300">full visible chart history</strong>
+                {chartContext
+                  ? ` (${chartContext.observationCount} observations).`
+                  : " once entities are selected."}
               </div>
             )}
             {messages.map((m) => (
@@ -109,7 +159,7 @@ export default function AiAnalyst({
                 }`}
               >
                 <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-                  {m.role === "user" ? "You" : "Analyst"}
+                  {m.role === "user" ? "You" : "Lead Analyst"}
                 </p>
                 {m.parts.map((part, i) =>
                   part.type === "text" ? (
@@ -120,9 +170,14 @@ export default function AiAnalyst({
                 )}
               </div>
             ))}
-            {error && (
+            {displayError && (
               <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-                {error.message}
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-rose-400/80">
+                  Error
+                </p>
+                <p className="whitespace-pre-wrap break-words leading-relaxed">
+                  {displayError}
+                </p>
               </div>
             )}
           </div>

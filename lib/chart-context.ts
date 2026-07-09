@@ -9,10 +9,13 @@ export interface ChartContext {
   denominator?: string;
   selectedEntities: string[];
   showSMA: boolean;
+  smaEntities?: string[];
   showStockOverlay: boolean;
   stockOverlayEntity?: string;
   stockTicker?: string;
-  recentDataPoints: TrendDatum[];
+  stockEntities?: string[];
+  /** Full chart rows currently visible for the active timeframe (not truncated). */
+  visibleChartData: TrendDatum[];
   observationCount: number;
   isLive: boolean;
 }

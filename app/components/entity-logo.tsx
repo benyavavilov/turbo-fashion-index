@@ -1,30 +1,41 @@
 "use client";
 
 import { useState } from "react";
+import { Building2, Sparkles, TrendingUp } from "lucide-react";
 
-import { clearbitLogoUrl, getBrandDomain } from "@/lib/brand-assets";
+import { getEntityLogoUrlForEntity } from "@/lib/brand-assets";
 import type { EntityCategory } from "@/app/actions";
 
-const AVATAR_COLORS = [
-  "#6366f1",
-  "#10b981",
-  "#f59e0b",
-  "#06b6d4",
-  "#a855f7",
-  "#ec4899",
-  "#3b82f6",
-  "#14b8a6",
-];
+const CULTURAL_TRENDS = new Set([
+  "Quiet Luxury",
+  "Old Money",
+  "Y2K Fashion",
+  "Vintage",
+  "Streetwear",
+  "Hypebeast",
+]);
 
-function colorForName(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+function IconPill({
+  children,
+  size,
+  className = "",
+}: {
+  children: React.ReactNode;
+  size: number;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center justify-center rounded-full bg-neutral-800/90 ring-1 ring-inset ring-neutral-700/60 ${className}`}
+      style={{ width: size, height: size }}
+      aria-hidden
+    >
+      {children}
+    </span>
+  );
 }
 
-function LetterAvatar({
+function TrendIcon({
   name,
   size,
   className = "",
@@ -33,22 +44,34 @@ function LetterAvatar({
   size: number;
   className?: string;
 }) {
-  const letter = name.trim().charAt(0).toUpperCase() || "?";
-  const bg = colorForName(name);
+  const Icon = CULTURAL_TRENDS.has(name) ? Sparkles : TrendingUp;
 
   return (
-    <span
-      className={`inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${className}`}
-      style={{
-        width: size,
-        height: size,
-        backgroundColor: bg,
-        fontSize: Math.max(10, size * 0.42),
-      }}
-      aria-hidden
-    >
-      {letter}
-    </span>
+    <IconPill size={size} className={className}>
+      <Icon
+        className="text-neutral-300"
+        style={{ width: size * 0.5, height: size * 0.5 }}
+        strokeWidth={2}
+      />
+    </IconPill>
+  );
+}
+
+function BrandFallbackIcon({
+  size,
+  className = "",
+}: {
+  size: number;
+  className?: string;
+}) {
+  return (
+    <IconPill size={size} className={className}>
+      <Building2
+        className="text-neutral-400"
+        style={{ width: size * 0.5, height: size * 0.5 }}
+        strokeWidth={2}
+      />
+    </IconPill>
   );
 }
 
@@ -64,15 +87,20 @@ export default function EntityLogo({
   className?: string;
 }) {
   const [failed, setFailed] = useState(false);
-  const domain = getBrandDomain(name);
+  const isTrend = category === "trend";
 
-  if (failed || !domain) {
-    return <LetterAvatar name={name} size={size} className={className} />;
+  if (isTrend) {
+    return <TrendIcon name={name} size={size} className={className} />;
+  }
+
+  const logoUrl = getEntityLogoUrlForEntity(name);
+  if (failed || !logoUrl) {
+    return <BrandFallbackIcon size={size} className={className} />;
   }
 
   return (
     <img
-      src={clearbitLogoUrl(domain)}
+      src={logoUrl}
       alt=""
       width={size}
       height={size}

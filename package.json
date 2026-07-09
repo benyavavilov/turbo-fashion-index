@@ -13,6 +13,7 @@
     "@ai-sdk/google": "^4.0.8",
     "@ai-sdk/openai": "^4.0.8",
     "@ai-sdk/react": "^4.0.17",
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.110.0",
     "ai": "^7.0.16",
     "google-trends-api": "^4.9.2",
