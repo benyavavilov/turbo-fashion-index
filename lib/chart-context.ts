@@ -1,12 +1,15 @@
-import type { TrendDatum } from "@/app/actions";
+import type { TrendDatum } from "@/lib/chart-data";
 
 export type Timeframe = "6M" | "1Y" | "5Y";
 
+export interface PinnedDataPoint {
+  date: string;
+  /** All active series values at this date (entity names, __stock, __sma keys). */
+  values: Record<string, number>;
+}
+
 export interface ChartContext {
   timeframe: Timeframe;
-  ratioMode: boolean;
-  numerator?: string;
-  denominator?: string;
   selectedEntities: string[];
   showSMA: boolean;
   smaEntities?: string[];
@@ -18,4 +21,5 @@ export interface ChartContext {
   visibleChartData: TrendDatum[];
   observationCount: number;
   isLive: boolean;
+  pinnedData?: PinnedDataPoint | null;
 }

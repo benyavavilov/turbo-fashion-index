@@ -21,6 +21,8 @@
 import { createClient } from "@supabase/supabase-js";
 import googleTrends from "google-trends-api";
 
+import { entities } from "../lib/entities";
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -46,59 +48,13 @@ const FRESH_DATA_THRESHOLD = 250;
 /** How far back to pull the search-interest timeline. */
 const MONTHS_OF_HISTORY = 6;
 
-type EntityCategory = "brand" | "trend";
+/** Canonical entity catalog — synced with lib/entities.ts */
+const TRACKED_ENTITIES = entities.map(({ name, category }) => ({
+  name,
+  category,
+}));
 
-interface TrackedEntity {
-  name: string;
-  category: EntityCategory;
-}
-
-/** The 30 entities we track. */
-const TRACKED_ENTITIES: TrackedEntity[] = [
-  // Artificial Scarcity
-  { name: "Supreme", category: "brand" },
-  { name: "Bape", category: "brand" },
-  { name: "Hypebeast", category: "trend" },
-
-  // Utility & Gorpcore
-  { name: "Arc'teryx", category: "brand" },
-  { name: "The North Face", category: "brand" },
-  { name: "Patagonia", category: "brand" },
-  { name: "Carhartt", category: "brand" },
-  { name: "Gorpcore", category: "trend" },
-
-  // Market-Share War (Athletics)
-  { name: "Nike", category: "brand" },
-  { name: "Adidas", category: "brand" },
-  { name: "On Running", category: "brand" },
-  { name: "New Balance", category: "brand" },
-  { name: "Athleisure", category: "trend" },
-
-  // Fast Fashion
-  { name: "Shein", category: "brand" },
-  { name: "Zara", category: "brand" },
-  { name: "H&M", category: "brand" },
-  { name: "Fast Fashion", category: "trend" },
-
-  // Wealth Effect & Premium
-  { name: "Louis Vuitton", category: "brand" },
-  { name: "Hermès", category: "brand" },
-  { name: "Goyard", category: "brand" },
-  { name: "Lululemon", category: "brand" },
-  { name: "Ralph Lauren", category: "brand" },
-  { name: "Peter Millar", category: "brand" },
-  { name: "Quiet Luxury", category: "trend" },
-  { name: "Old Money", category: "trend" },
-
-  // Turnaround & Heritage
-  { name: "Abercrombie", category: "brand" },
-  { name: "Gap", category: "brand" },
-
-  // Secondary Market & Nostalgia
-  { name: "Depop", category: "brand" },
-  { name: "Vintage", category: "trend" },
-  { name: "Y2K Fashion", category: "trend" }
-];
+type TrackedEntity = (typeof TRACKED_ENTITIES)[number];
 
 // ---------------------------------------------------------------------------
 // Supabase client (service role -> bypasses Row-Level Security for backend writes)

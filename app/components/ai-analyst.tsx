@@ -4,8 +4,10 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { Bot, MessageSquare, Send, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 
 import type { ChartContext } from "@/lib/chart-context";
+import { normalizeDateString } from "@/lib/chart-data";
 
 export default function AiAnalyst({
   chartContext,
@@ -72,10 +74,10 @@ export default function AiAnalyst({
 
   const contextSummary = useMemo(() => {
     if (!chartContext) return null;
-    const entities = chartContext.ratioMode
-      ? [chartContext.numerator, chartContext.denominator].filter(Boolean)
-      : chartContext.selectedEntities;
-    return `${entities.join(", ") || "no entities"} · ${chartContext.timeframe} · ${chartContext.observationCount} pts`;
+    const pin = chartContext.pinnedData
+      ? ` · pinned ${normalizeDateString(chartContext.pinnedData.date)}`
+      : "";
+    return `${chartContext.selectedEntities.join(", ") || "no entities"} · ${chartContext.timeframe} · ${chartContext.observationCount} pts${pin}`;
   }, [chartContext]);
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -141,7 +143,7 @@ export default function AiAnalyst({
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
             {messages.length === 0 && (
               <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-400">
-                Ask about momentum shifts, substitution ratios, or whether search
+                Ask about momentum shifts, brand vs. trend dynamics, or whether search
                 interest is leading equity moves. I see the{" "}
                 <strong className="text-neutral-300">full visible chart history</strong>
                 {chartContext
@@ -163,9 +165,18 @@ export default function AiAnalyst({
                 </p>
                 {m.parts.map((part, i) =>
                   part.type === "text" ? (
-                    <p key={i} className="whitespace-pre-wrap leading-relaxed">
-                      {part.text}
-                    </p>
+                    m.role === "user" ? (
+                      <p key={i} className="whitespace-pre-wrap leading-relaxed">
+                        {part.text}
+                      </p>
+                    ) : (
+                      <div
+                        key={i}
+                        className="prose prose-invert prose-sm max-w-none leading-relaxed prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-neutral-100"
+                      >
+                        <ReactMarkdown>{part.text}</ReactMarkdown>
+                      </div>
+                    )
                   ) : null
                 )}
               </div>

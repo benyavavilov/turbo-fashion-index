@@ -1,5 +1,10 @@
-import type { TrendDatum } from "@/app/actions";
 import type { Timeframe } from "@/lib/chart-context";
+
+/** One row per date; each tracked entity is a numeric column keyed by its name. */
+export interface TrendDatum {
+  date: string;
+  [entityName: string]: string | number | null | undefined;
+}
 
 /** Max calendar drift when snapping a stock quote onto a search-interest date. */
 const STOCK_SNAP_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
@@ -110,12 +115,13 @@ export function groupAndAlignChartData(
     const aligned: TrendDatum = { date: row.date };
     for (const name of series) {
       const val = row[name];
-      aligned[name] = typeof val === "number" ? val : null;
+      aligned[name] =
+        typeof val === "number" && !Number.isNaN(val) ? val : null;
     }
-    for (const key of keysToPreserve) {
-      if (series.includes(key)) continue;
+    for (const key of extraKeys) {
       const val = row[key];
-      if (typeof val === "number") aligned[key] = val;
+      aligned[key] =
+        typeof val === "number" && !Number.isNaN(val) ? val : null;
     }
     for (const [key, value] of Object.entries(row)) {
       if (key === "date" || keysToPreserve.has(key)) continue;

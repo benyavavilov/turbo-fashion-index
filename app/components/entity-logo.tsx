@@ -1,19 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, Sparkles, TrendingUp } from "lucide-react";
+import { Building2, Star } from "lucide-react";
 
 import { getEntityLogoUrlForEntity } from "@/lib/brand-assets";
-import type { EntityCategory } from "@/app/actions";
-
-const CULTURAL_TRENDS = new Set([
-  "Quiet Luxury",
-  "Old Money",
-  "Y2K Fashion",
-  "Vintage",
-  "Streetwear",
-  "Hypebeast",
-]);
+import type { EntityCategory } from "@/lib/entities";
 
 function IconPill({
   children,
@@ -36,22 +27,20 @@ function IconPill({
 }
 
 function TrendIcon({
-  name,
   size,
   className = "",
 }: {
-  name: string;
   size: number;
   className?: string;
 }) {
-  const Icon = CULTURAL_TRENDS.has(name) ? Sparkles : TrendingUp;
-
   return (
     <IconPill size={size} className={className}>
-      <Icon
-        className="text-neutral-300"
+      <Star
+        className="text-amber-300/90"
         style={{ width: size * 0.5, height: size * 0.5 }}
         strokeWidth={2}
+        fill="currentColor"
+        fillOpacity={0.25}
       />
     </IconPill>
   );
@@ -90,7 +79,7 @@ export default function EntityLogo({
   const isTrend = category === "trend";
 
   if (isTrend) {
-    return <TrendIcon name={name} size={size} className={className} />;
+    return <TrendIcon size={size} className={className} />;
   }
 
   const logoUrl = getEntityLogoUrlForEntity(name);

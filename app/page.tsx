@@ -1,47 +1,14 @@
-import { Activity, BarChart3, Gauge, LineChart as LineChartIcon, TrendingUp } from "lucide-react";
+import { LineChart as LineChartIcon } from "lucide-react";
 
 import { getTrackedEntities } from "./actions";
+import { isSupabaseConfigured } from "@/lib/supabase";
 import TerminalShell from "./components/terminal-shell";
 
 export const dynamic = "force-dynamic";
 
-const kpis = [
-  {
-    label: "Index Momentum",
-    value: "83.0",
-    delta: "+16.9%",
-    up: true,
-    icon: TrendingUp,
-    hint: "vs. 6-month start",
-  },
-  {
-    label: "Tracked Entities",
-    value: "30",
-    delta: "brands + trends",
-    up: true,
-    icon: Activity,
-    hint: "live from Supabase",
-  },
-  {
-    label: "Top Mover",
-    value: "Quiet Luxury",
-    delta: "+41 pts",
-    up: true,
-    icon: Gauge,
-    hint: "fastest riser",
-  },
-  {
-    label: "Data Coverage",
-    value: "5 yr",
-    delta: "weekly",
-    up: true,
-    icon: BarChart3,
-    hint: "rolling window",
-  },
-];
-
 export default async function Home() {
   const entities = await getTrackedEntities();
+  const isLive = isSupabaseConfigured();
 
   return (
     <div className="min-h-screen bg-neutral-950">
@@ -53,7 +20,7 @@ export default async function Home() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight text-neutral-100">
-                TurboFashion Index
+                Turbo Fashion Index
               </h1>
               <p className="text-xs text-neutral-500">
                 AI-powered fashion search intelligence terminal
@@ -72,34 +39,7 @@ export default async function Home() {
       </header>
 
       <main className="mx-auto max-w-[1600px] space-y-6 p-6">
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {kpis.map(({ label, value, delta, up, icon: Icon, hint }) => (
-            <div
-              key={label}
-              className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-4"
-            >
-              <div className="flex items-start justify-between">
-                <span className="text-sm text-neutral-400">{label}</span>
-                <Icon className="h-4 w-4 text-neutral-600" />
-              </div>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="font-mono text-2xl font-semibold tracking-tight text-neutral-100">
-                  {value}
-                </span>
-                <span
-                  className={`text-xs font-medium ${
-                    up ? "text-emerald-400" : "text-rose-400"
-                  }`}
-                >
-                  {delta}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-neutral-500">{hint}</p>
-            </div>
-          ))}
-        </section>
-
-        <TerminalShell entities={entities} />
+        <TerminalShell entities={entities} isLive={isLive} />
 
         <p className="text-center text-xs text-neutral-600">
           Search interest from Google Trends · stored in Supabase · equity overlay via

@@ -41,9 +41,25 @@ export async function GET(request: NextRequest) {
         close: Math.round((q.close as number) * 100) / 100,
       }));
 
+    if (quotes.length === 0) {
+      console.error(
+        `[api/finance] No quote data returned for ticker "${ticker}" (timeframe=${timeframe}). Raw response:`,
+        JSON.stringify({ quoteCount: rawQuotes.length, chartKeys: Object.keys(chart ?? {}) })
+      );
+      return NextResponse.json(
+        {
+          error: `No stock data available for ${ticker}`,
+          ticker,
+          quotes: [],
+          stockKey: STOCK_KEY,
+        },
+        { status: 404 }
+      );
+    }
+
     return NextResponse.json({ ticker, quotes, stockKey: STOCK_KEY });
   } catch (err) {
-    console.error("[api/finance]", err);
+    console.error(`[api/finance] Fetch failed for ticker "${ticker}":`, err);
     const message =
       err instanceof Error ? err.message : "Failed to fetch stock data";
     return NextResponse.json({ error: message }, { status: 502 });

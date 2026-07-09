@@ -1,61 +1,57 @@
 "use server";
 
-import { createClient } from "@supabase/supabase-js";
-
 import { normalizeDateString } from "@/lib/chart-data";
-
-export type EntityCategory = "brand" | "trend";
-
-export interface EntityMeta {
-  name: string;
-  category: EntityCategory;
-}
-
-/** One row per date; each tracked entity is a numeric column keyed by its name. */
-export interface TrendDatum {
-  date: string;
-  [entityName: string]: string | number | null | undefined;
-}
+import type { TrendDatum } from "@/lib/chart-data";
+import { entities, type EntityMeta } from "@/lib/entities";
+import { createBrowserSupabase } from "@/lib/supabase";
 
 /** Shape of a joined row returned by the Supabase query. */
 interface MetricJoinRow {
   recorded_date: string;
   interest_value: number;
-  tracked_entities: { name: string; category: EntityCategory } | null;
-}
-
-function createSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anonKey || url.includes("your-project-id")) {
-    return null;
-  }
-
-  return createClient(url, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  tracked_entities: { name: string; category: import("@/lib/entities").EntityCategory } | null;
 }
 
 /**
- * Lightweight catalog fetch — all tracked entities for the picker UI.
- * (Only ~30 rows; no metrics payload.)
+ * Canonical entity catalog for the dashboard (code-defined for backtesting).
  */
 export async function getTrackedEntities(): Promise<EntityMeta[]> {
-  const supabase = createSupabase();
-  if (!supabase) return [];
+  return entities;
+}
+
+export interface EntityRequestInput {
+  name: string;
+  category: import("@/lib/entities").EntityCategory;
+  notes?: string;
+}
+
+export async function submitEntityRequest(
+  input: EntityRequestInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const name = input.name.trim();
+  if (!name) {
+    return { ok: false, error: "Entity name is required." };
+  }
+
+  const supabase = createBrowserSupabase();
+  if (!supabase) {
+    return { ok: false, error: "Supabase is not configured." };
+  }
 
   try {
-    const { data, error } = await supabase
-      .from("tracked_entities")
-      .select("name, category")
-      .order("name", { ascending: true });
+    const { error } = await supabase.from("entity_requests").insert({
+      name,
+      category: input.category,
+      notes: input.notes?.trim() || null,
+    });
 
     if (error) throw error;
-    return (data ?? []) as EntityMeta[];
+    return { ok: true };
   } catch (err) {
-    console.error("[getTrackedEntities] Failed:", err);
-    return [];
+    console.error("[submitEntityRequest] Failed:", err);
+    const message =
+      err instanceof Error ? err.message : "Failed to submit request.";
+    return { ok: false, error: message };
   }
 }
 
@@ -69,7 +65,7 @@ export async function getTrendData(
 ): Promise<TrendDatum[]> {
   if (selectedEntityNames.length === 0) return [];
 
-  const supabase = createSupabase();
+  const supabase = createBrowserSupabase();
   if (!supabase) return [];
 
   try {

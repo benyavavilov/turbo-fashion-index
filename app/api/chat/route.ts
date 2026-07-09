@@ -25,7 +25,6 @@ const MASTER_SYSTEM_PROMPT = `You are the **TurboFashion Index Lead Analyst** �
 ## What you analyze
 - **Google Trends search interest** (0–100 index) as a proxy for cultural attention and consumer demand.
 - **Yahoo Finance equity overlays** (when active) as financial reality checks against search momentum.
-- **Substitution ratios** (numerator ÷ denominator) when ratio mode is on — values above 1.0 mean numerator outperformance.
 - **90-day SMA lines** when enabled — use them to separate signal from noise.
 
 ## How you reason
@@ -33,6 +32,7 @@ const MASTER_SYSTEM_PROMPT = `You are the **TurboFashion Index Lead Analyst** �
 - Distinguish **brands** from **cultural trend entities** — they behave differently.
 - Reference specific entities, dates, and numbers from the context payload; cite peaks, troughs, and inflection points across the **full** visible history.
 - Flag when search interest appears to **lead or lag** stock price moves (intuition only — not formal causality unless the data is overwhelming).
+- When a **pinned data point** is present in context, treat it as the user's focal observation — reference it directly when relevant.
 - Maintain perfect **multi-turn memory**: treat the conversation history as continuous context; reference prior user questions naturally.
 
 ## Constraints
@@ -64,9 +64,7 @@ function formatTimeframeLabel(timeframe: Timeframe): string {
 }
 
 function buildContextPayload(ctx: ChartContext): string {
-  const entityList = ctx.ratioMode
-    ? [ctx.numerator, ctx.denominator].filter(Boolean).join(", ")
-    : ctx.selectedEntities.join(", ") || "none";
+  const entityList = ctx.selectedEntities.join(", ") || "none";
 
   const lines: string[] = [
     "## Dashboard cheat sheet (silent context — do not repeat verbatim)",
@@ -76,14 +74,6 @@ function buildContextPayload(ctx: ChartContext): string {
     `Data source: ${ctx.isLive ? "live Supabase feed" : "sample/demo data"}.`,
     `Total observations in view: ${ctx.observationCount}.`,
   ];
-
-  if (ctx.ratioMode && ctx.numerator && ctx.denominator) {
-    lines.push(
-      `Ratio mode: **ON** — tracking ${ctx.numerator} ÷ ${ctx.denominator}.`
-    );
-  } else {
-    lines.push("Ratio mode: off.");
-  }
 
   if (ctx.smaEntities?.length) {
     lines.push(
@@ -101,6 +91,16 @@ function buildContextPayload(ctx: ChartContext): string {
     lines.push(`Stock overlays active for: ${tickers}.`);
   } else {
     lines.push("Stock overlays: none.");
+  }
+
+  if (ctx.pinnedData) {
+    lines.push(
+      "",
+      "## User-pinned chart data point",
+      "The user pinned a specific date on the chart. All active series values at that date are below. Prioritize this observation when the user asks about it.",
+      `Date: ${ctx.pinnedData.date}`,
+      JSON.stringify(ctx.pinnedData.values, null, 2)
+    );
   }
 
   lines.push(
