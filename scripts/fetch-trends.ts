@@ -5,7 +5,8 @@
  *
  * Flow:
  *   1. Seed the `tracked_entities` table with the brands / style movements we track.
- *   2. For each entity, query Google Trends "interest over time" for the last 6 months.
+ *   2. For each entity, query Google Trends "interest over time" for the last 5 years
+ *      through the current date (explicit startTime + endTime).
  *   3. Parse the timeline and upsert the normalized metrics into `market_metrics`.
  *
  * Run with:  npm run fetch:trends
@@ -41,12 +42,12 @@ const COOLDOWN_MS = 30000;
 
 /**
  * Smart-resumption threshold. If an entity already has at least this many
- * points stored, we treat its data as fresh and skip the fetch entirely.
+ * points AND a recent latest date, we skip the Google Trends fetch.
  */
 const FRESH_DATA_THRESHOLD = 250;
 
-/** How far back to pull the search-interest timeline. */
-const MONTHS_OF_HISTORY = 6;
+/** How many years of weekly search history to request from Google Trends. */
+const YEARS_OF_HISTORY = 5;
 
 /** Canonical entity catalog — synced with lib/entities.ts */
 const TRACKED_ENTITIES = entities.map(({ name, category }) => ({
@@ -110,10 +111,11 @@ function randomJitterMs(min = JITTER_MIN_MS, max = JITTER_MAX_MS): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function startOfHistoryWindow(): Date {
-  const start = new Date();
-  start.setMonth(start.getMonth() - MONTHS_OF_HISTORY);
-  return start;
+function historyWindow(): { startTime: Date; endTime: Date } {
+  const endTime = new Date();
+  const startTime = new Date(endTime.getTime());
+  startTime.setFullYear(startTime.getFullYear() - YEARS_OF_HISTORY);
+  return { startTime, endTime };
 }
 
 /**
@@ -142,23 +144,50 @@ async function seedEntities(): Promise<Map<string, string>> {
 }
 
 /**
- * Smart resumption: how many metric points does this entity already have?
- * A cheap HEAD/count query lets us skip entities whose data is already fresh
- * so we don't spend rate limits re-fetching them.
+ * Smart resumption: how many metric points does this entity already have,
+ * and what is the newest recorded_date? Count alone is not enough — a large
+ * stale series ending in 2023 would otherwise skip forever.
  */
-async function existingMetricCount(entityId: string): Promise<number> {
-  const { count, error } = await supabase
+async function existingMetricFreshness(
+  entityId: string
+): Promise<{ count: number; latestDate: string | null }> {
+  const { count, error: countError } = await supabase
     .from("market_metrics")
     .select("id", { count: "exact", head: true })
     .eq("entity_id", entityId);
 
-  if (error) {
-    // Non-fatal: if the count check fails, fall back to fetching.
-    console.warn(`      (count check failed: ${error.message})`);
-    return 0;
+  if (countError) {
+    console.warn(`      (count check failed: ${countError.message})`);
+    return { count: 0, latestDate: null };
   }
 
-  return count ?? 0;
+  const { data: latestRows, error: latestError } = await supabase
+    .from("market_metrics")
+    .select("recorded_date")
+    .eq("entity_id", entityId)
+    .order("recorded_date", { ascending: false })
+    .limit(1);
+
+  if (latestError) {
+    console.warn(`      (latest-date check failed: ${latestError.message})`);
+    return { count: count ?? 0, latestDate: null };
+  }
+
+  const latestDate =
+    latestRows?.[0]?.recorded_date != null
+      ? String(latestRows[0].recorded_date).slice(0, 10)
+      : null;
+
+  return { count: count ?? 0, latestDate };
+}
+
+function isTrendHistoryFresh(count: number, latestDate: string | null): boolean {
+  if (count <= FRESH_DATA_THRESHOLD) return false;
+  if (!latestDate) return false;
+  const latestMs = new Date(`${latestDate}T12:00:00`).getTime();
+  if (Number.isNaN(latestMs)) return false;
+  const maxAgeMs = 45 * 24 * 60 * 60 * 1000;
+  return Date.now() - latestMs <= maxAgeMs;
 }
 
 /**
@@ -168,11 +197,13 @@ async function existingMetricCount(entityId: string): Promise<number> {
 async function fetchMetricsForEntity(
   entity: TrackedEntity,
   entityId: string,
-  startTime: Date
+  startTime: Date,
+  endTime: Date
 ): Promise<MetricRow[]> {
   const raw = await googleTrends.interestOverTime({
     keyword: entity.name,
     startTime,
+    endTime,
   });
 
   let payload: InterestOverTimePayload;
@@ -209,13 +240,14 @@ async function fetchMetricsForEntity(
 async function fetchMetricsWithRetry(
   entity: TrackedEntity,
   entityId: string,
-  startTime: Date
+  startTime: Date,
+  endTime: Date
 ): Promise<MetricRow[]> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      return await fetchMetricsForEntity(entity, entityId, startTime);
+      return await fetchMetricsForEntity(entity, entityId, startTime, endTime);
     } catch (err) {
       lastError = err;
       const message = err instanceof Error ? err.message : String(err);
@@ -261,11 +293,11 @@ async function main(): Promise<void> {
   console.log("=== TurboFashion Index :: Trends ingestion ===");
 
   const idByName = await seedEntities();
-  const startTime = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
+  const { startTime, endTime } = historyWindow();
 
   console.log(
-    `\n[2/2] Fetching ${MONTHS_OF_HISTORY}-month search interest for ${TRACKED_ENTITIES.length} entities` +
-      ` (>= ${startTime.toISOString().slice(0, 10)})...`
+    `\n[2/2] Fetching ${YEARS_OF_HISTORY}-year search interest for ${TRACKED_ENTITIES.length} entities` +
+      ` (${startTime.toISOString().slice(0, 10)} → ${endTime.toISOString().slice(0, 10)})...`
   );
 
   let totalRows = 0;
@@ -284,19 +316,30 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // Smart resumption: skip entities that already have fresh data.
-    const existing = await existingMetricCount(entityId);
-    if (existing > FRESH_DATA_THRESHOLD) {
+    // Smart resumption: skip only when volume is high AND last point is recent.
+    const { count: existing, latestDate } =
+      await existingMetricFreshness(entityId);
+    if (isTrendHistoryFresh(existing, latestDate)) {
       skipped++;
       console.log(
-        `  ${position}  Skipping ${entity.name} - Data already fresh (${existing} points).`
+        `  ${position}  Skipping ${entity.name} - Data already fresh (${existing} points, latest ${latestDate}).`
       );
       continue;
+    }
+    if (existing > FRESH_DATA_THRESHOLD && latestDate) {
+      console.log(
+        `  ${position}  Refreshing ${entity.name} - volume ok (${existing}) but stale (latest ${latestDate}).`
+      );
     }
 
     let fetchedThisEntity = false;
     try {
-      const rows = await fetchMetricsWithRetry(entity, entityId, startTime);
+      const rows = await fetchMetricsWithRetry(
+        entity,
+        entityId,
+        startTime,
+        endTime
+      );
       await persistMetrics(rows);
       totalRows += rows.length;
       succeeded++;

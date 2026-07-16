@@ -34,6 +34,14 @@ export function normalizeDateString(dateStr: string): string {
   return `${y}-${m}-${day}`;
 }
 
+function sortTrendRows(rows: TrendDatum[]): TrendDatum[] {
+  return [...rows].sort(
+    (a, b) =>
+      new Date(normalizeDateString(String(a.date))).getTime() -
+      new Date(normalizeDateString(String(b.date))).getTime()
+  );
+}
+
 /** Collapse rows that share the same normalized date into one merged object. */
 export function consolidateRowsByDate(data: TrendDatum[]): TrendDatum[] {
   const byDate = new Map<string, TrendDatum>();
@@ -51,13 +59,15 @@ export function consolidateRowsByDate(data: TrendDatum[]): TrendDatum[] {
       if (key === "date") continue;
       if (typeof value === "number" && !Number.isNaN(value)) {
         bucket[key] = value;
+      } else if (value === null) {
+        if (!(key in bucket)) bucket[key] = null;
       } else if (typeof value === "string" && !(key in bucket)) {
         bucket[key] = value;
       }
     }
   }
 
-  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return sortTrendRows(Array.from(byDate.values()));
 }
 
 /** Latest observation date present in a series (anchors timeframe windows). */
@@ -85,13 +95,14 @@ export function filterByTimeframe(
   data: TrendDatum[],
   timeframe: Timeframe
 ): TrendDatum[] {
-  const latest = latestDateInData(data);
-  if (!latest) return consolidateRowsByDate(data);
+  const consolidated = consolidateRowsByDate(data);
+  const latest = latestDateInData(consolidated);
+  if (!latest) return consolidated;
 
   const cutoff = cutoffDateFrom(latest, timeframe);
   const cutoffTs = cutoff.getTime();
 
-  const filtered = data.filter((row) => {
+  const filtered = consolidated.filter((row) => {
     const ts = dateToTimestamp(String(row.date));
     return ts != null && ts >= cutoffTs;
   });
@@ -100,8 +111,42 @@ export function filterByTimeframe(
 }
 
 /**
- * Merge rows by normalized date and ensure every series key exists on each row
- * (null when missing) so Recharts tooltips stay complete and connectNulls bridges gaps.
+ * LOCF (last observation carried forward) for brand/search series only.
+ * After Google Trends lag behind live Yahoo quotes, trailing weekly rows stay
+ * flat at the last known interest instead of dropping to null and breaking
+ * tooltips / line continuity.
+ */
+export function forwardFillSeries(
+  rows: TrendDatum[],
+  seriesKeys: string[]
+): TrendDatum[] {
+  if (rows.length === 0 || seriesKeys.length === 0) return rows;
+
+  const lastKnown: Record<string, number> = {};
+  const filled: TrendDatum[] = [];
+
+  for (const row of rows) {
+    const next: TrendDatum = { ...row };
+    for (const key of seriesKeys) {
+      const val = next[key];
+      if (typeof val === "number" && !Number.isNaN(val)) {
+        lastKnown[key] = val;
+      } else if (key in lastKnown) {
+        next[key] = lastKnown[key];
+      } else {
+        next[key] = null;
+      }
+    }
+    filled.push(next);
+  }
+
+  return filled;
+}
+
+/**
+ * Force every series key to exist as `number | null` on every row.
+ * Uniform objects keep Recharts hover/cursor aligned across the full X domain.
+ * Brand/search columns are then LOCF-filled so they extend to the last stock date.
  */
 export function groupAndAlignChartData(
   data: TrendDatum[],
@@ -109,28 +154,24 @@ export function groupAndAlignChartData(
   extraKeys: string[] = []
 ): TrendDatum[] {
   const merged = consolidateRowsByDate(data);
-  const keysToPreserve = new Set([...series, ...extraKeys]);
+  const keys = [...series, ...extraKeys];
 
-  return merged.map((row) => {
-    const aligned: TrendDatum = { date: row.date };
-    for (const name of series) {
-      const val = row[name];
-      aligned[name] =
-        typeof val === "number" && !Number.isNaN(val) ? val : null;
-    }
-    for (const key of extraKeys) {
-      const val = row[key];
-      aligned[key] =
-        typeof val === "number" && !Number.isNaN(val) ? val : null;
-    }
-    for (const [key, value] of Object.entries(row)) {
-      if (key === "date" || keysToPreserve.has(key)) continue;
-      if (typeof value === "number" || typeof value === "string") {
-        aligned[key] = value;
+  const aligned = sortTrendRows(
+    merged.map((row) => {
+      const next: TrendDatum = {
+        date: normalizeDateString(String(row.date)),
+      };
+      for (const name of keys) {
+        const val = row[name];
+        next[name] =
+          typeof val === "number" && !Number.isNaN(val) ? val : null;
       }
-    }
-    return aligned;
-  });
+      return next;
+    })
+  );
+
+  // Forward-fill child brands only — never invent stock prices.
+  return forwardFillSeries(aligned, series);
 }
 
 function findNearestStockPrice(
@@ -158,33 +199,94 @@ function findNearestStockPrice(
   return best?.price ?? null;
 }
 
+function collectTrendBrandKeys(rows: TrendDatum[], stockKey: string): string[] {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (key === "date" || key === stockKey) continue;
+      keys.add(key);
+    }
+  }
+  return [...keys].sort();
+}
+
+/**
+ * FULL OUTER JOIN of search-trend dates and stock quote dates.
+ * Every date in either source appears once; missing brand interest and missing
+ * stock closes are explicitly `null` (never omitted / undefined).
+ */
 export function mergeStockPrices(
   data: TrendDatum[] | null | undefined,
   pricesByDate: Map<string, number> | null | undefined,
   stockKey = "__stock"
 ): TrendDatum[] {
-  if (!Array.isArray(data) || data.length === 0) return data ?? [];
-  if (!pricesByDate || !(pricesByDate instanceof Map) || pricesByDate.size === 0) {
-    return consolidateRowsByDate(data);
+  const trendRows = Array.isArray(data) ? consolidateRowsByDate(data) : [];
+  const brandKeys = collectTrendBrandKeys(trendRows, stockKey);
+
+  const stockEntries =
+    pricesByDate && pricesByDate instanceof Map
+      ? Array.from(pricesByDate.entries())
+          .map(([date, price]) => ({
+            date: normalizeDateString(date),
+            price,
+          }))
+          .filter((e) => typeof e.price === "number" && !Number.isNaN(e.price))
+          .sort((a, b) => a.date.localeCompare(b.date))
+      : [];
+
+  if (trendRows.length === 0 && stockEntries.length === 0) return [];
+
+  if (stockEntries.length === 0) {
+    return forwardFillSeries(
+      sortTrendRows(
+        trendRows.map((row) => {
+          const date = normalizeDateString(String(row.date));
+          const next: TrendDatum = { date, [stockKey]: null };
+          for (const brand of brandKeys) {
+            const val = row[brand];
+            next[brand] =
+              typeof val === "number" && !Number.isNaN(val) ? val : null;
+          }
+          return next;
+        })
+      ),
+      brandKeys
+    );
   }
 
   try {
-    const stockEntries = Array.from(pricesByDate.entries())
-      .map(([date, price]) => ({
-        date: normalizeDateString(date),
-        price,
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    const enriched = data.map((row) => {
+    const trendByDate = new Map<string, TrendDatum>();
+    for (const row of trendRows) {
       const date = normalizeDateString(String(row.date));
+      trendByDate.set(date, { ...row, date });
+    }
+
+    const allDates = new Set<string>();
+    for (const date of trendByDate.keys()) allDates.add(date);
+    for (const entry of stockEntries) allDates.add(entry.date);
+
+    const masterDates = [...allDates].sort((a, b) => a.localeCompare(b));
+
+    const merged: TrendDatum[] = masterDates.map((date) => {
+      const trend = trendByDate.get(date);
+      const row: TrendDatum = { date };
+
+      for (const brand of brandKeys) {
+        const val = trend?.[brand];
+        row[brand] =
+          typeof val === "number" && !Number.isNaN(val) ? val : null;
+      }
+
       const price = findNearestStockPrice(date, stockEntries);
-      return price != null ? { ...row, date, [stockKey]: price } : { ...row, date };
+      row[stockKey] = price;
+
+      return row;
     });
 
-    return consolidateRowsByDate(enriched);
+    // Carry last known brand interest through trailing stock-only dates.
+    return forwardFillSeries(sortTrendRows(merged), brandKeys);
   } catch {
-    return consolidateRowsByDate(data);
+    return trendRows;
   }
 }
 
@@ -213,17 +315,31 @@ export function mergeStockPricesForEntities(
 
   if (stockSeries.length === 0) return canonical;
 
-  const enriched = canonical.map((row) => {
-    const date = normalizeDateString(String(row.date));
-    const next: TrendDatum = { ...row, date };
+  const allDates = new Set(canonical.map((r) => normalizeDateString(String(r.date))));
+  for (const { entries } of stockSeries) {
+    for (const e of entries) allDates.add(e.date);
+  }
 
-    for (const { key, entries } of stockSeries) {
-      const price = findNearestStockPrice(date, entries);
-      if (price != null) next[key] = price;
-    }
+  const brandKeys = collectTrendBrandKeys(canonical, "");
+  const byDate = new Map(
+    canonical.map((r) => [normalizeDateString(String(r.date)), r] as const)
+  );
 
-    return next;
-  });
+  const merged = [...allDates]
+    .sort((a, b) => a.localeCompare(b))
+    .map((date) => {
+      const trend = byDate.get(date);
+      const next: TrendDatum = { date };
+      for (const brand of brandKeys) {
+        const val = trend?.[brand];
+        next[brand] =
+          typeof val === "number" && !Number.isNaN(val) ? val : null;
+      }
+      for (const { key, entries } of stockSeries) {
+        next[key] = findNearestStockPrice(date, entries);
+      }
+      return next;
+    });
 
-  return consolidateRowsByDate(enriched);
+  return sortTrendRows(merged);
 }

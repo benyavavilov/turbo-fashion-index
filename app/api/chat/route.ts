@@ -103,6 +103,20 @@ function buildContextPayload(ctx: ChartContext): string {
     );
   }
 
+  if (ctx.companyPage) {
+    const cp = ctx.companyPage;
+    lines.push(
+      "",
+      "## Active parent-company terminal",
+      `The user is currently on the company page for ${cp.parentName} ($${cp.ticker}).`,
+      `Child brands tracked on this page: ${cp.childBrands.join(", ")}.`,
+      "When they ask about moves, spikes, or drops, use the catalyst briefings below together with the chart dataset.",
+      "",
+      "### Recent catalyst briefings",
+      cp.catalystBriefings.trim() || "No catalyst briefings yet — the user has not run Analyze Parent & Brands."
+    );
+  }
+
   lines.push(
     "",
     "## Full visible chart dataset",

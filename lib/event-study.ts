@@ -2,12 +2,17 @@ import type { TrendDatum } from "@/lib/chart-data";
 import { normalizeDateString } from "@/lib/chart-data";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const SPIKE_INCREASE_THRESHOLD = 20;
+/** Default spike threshold when callers omit a sensitivity setting. */
+export const DEFAULT_SPIKE_THRESHOLD = 20;
+export const MIN_SPIKE_THRESHOLD = 10;
+export const MAX_SPIKE_THRESHOLD = 40;
 const TRAILING_WINDOW_DAYS = 30;
 const DEDUP_WINDOW_DAYS = 90;
 const HOLD_DAYS = 90;
 /** Max calendar drift when matching weekly stock quotes to a target date. */
 const STOCK_MATCH_DRIFT_DAYS = 21;
+
+export type SpikeSentimentLabel = "POSITIVE" | "NEGATIVE" | "NEUTRAL";
 
 export interface EventStudyEvent {
   date: string;
@@ -17,12 +22,20 @@ export interface EventStudyEvent {
   exitDate: string;
   priceAfterHold: number;
   returnPct: number;
+  sentiment?: SpikeSentimentLabel;
+  reason?: string;
 }
 
 export interface EventStudyResult {
   events: EventStudyEvent[];
   eventCount: number;
   averageReturnPct: number;
+  /** Average 90-day stock return for POSITIVE catalyst spikes (Long). */
+  positiveAverageReturnPct: number | null;
+  positiveEventCount: number;
+  /** Average 90-day stock return for NEGATIVE catalyst spikes (Short). */
+  negativeAverageReturnPct: number | null;
+  negativeEventCount: number;
 }
 
 function dateToMs(dateStr: string): number {
@@ -87,10 +100,15 @@ function findPriceAfterHold(
 
 function detectSpikeCandidates(
   rows: TrendDatum[],
-  brand: string
+  brand: string,
+  spikeThreshold: number
 ): { date: string; trendValue: number; increase: number }[] {
   const candidates: { date: string; trendValue: number; increase: number }[] =
     [];
+  const threshold = Math.max(
+    MIN_SPIKE_THRESHOLD,
+    Math.min(MAX_SPIKE_THRESHOLD, spikeThreshold)
+  );
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -111,7 +129,7 @@ function detectSpikeCandidates(
     }
 
     const increase = current - trailingMin;
-    if (increase >= SPIKE_INCREASE_THRESHOLD) {
+    if (increase >= threshold) {
       candidates.push({
         date: String(row.date),
         trendValue: current,
@@ -149,19 +167,45 @@ function dedupeSpikes(
   return deduped;
 }
 
+function averageReturn(events: EventStudyEvent[]): number | null {
+  if (events.length === 0) return null;
+  return events.reduce((sum, e) => sum + e.returnPct, 0) / events.length;
+}
+
+export function buildResult(events: EventStudyEvent[]): EventStudyResult {
+  const positive = events.filter((e) => e.sentiment === "POSITIVE");
+  const negative = events.filter((e) => e.sentiment === "NEGATIVE");
+
+  return {
+    events,
+    eventCount: events.length,
+    averageReturnPct:
+      events.length > 0
+        ? events.reduce((sum, e) => sum + e.returnPct, 0) / events.length
+        : 0,
+    positiveAverageReturnPct: averageReturn(positive),
+    positiveEventCount: positive.length,
+    negativeAverageReturnPct: averageReturn(negative),
+    negativeEventCount: negative.length,
+  };
+}
+
 /**
- * Event study: identify hype spikes (+20 pts in 30d) and measure 90-day stock returns.
+ * Event study: identify hype spikes (dynamic threshold over 30d) and measure 90-day stock returns.
  */
 export function runEventStudy(
   data: TrendDatum[],
   brand: string,
-  stockKey: string
+  stockKey: string,
+  spikeThreshold: number = DEFAULT_SPIKE_THRESHOLD
 ): EventStudyResult {
   const rows = [...data].sort((a, b) =>
     String(a.date).localeCompare(String(b.date))
   );
 
-  const spikes = dedupeSpikes(detectSpikeCandidates(rows, brand));
+  const spikes = dedupeSpikes(
+    detectSpikeCandidates(rows, brand, spikeThreshold)
+  );
   const events: EventStudyEvent[] = [];
 
   for (const spike of spikes) {
@@ -180,14 +224,76 @@ export function runEventStudy(
     });
   }
 
-  const averageReturnPct =
-    events.length > 0
-      ? events.reduce((sum, e) => sum + e.returnPct, 0) / events.length
-      : 0;
+  return buildResult(events);
+}
 
-  return {
-    events,
-    eventCount: events.length,
-    averageReturnPct,
-  };
+async function fetchSpikeSentiment(
+  entityName: string,
+  date: string
+): Promise<{ sentiment: SpikeSentimentLabel; reason: string }> {
+  try {
+    const res = await fetch("/api/sentiment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entityName, date }),
+    });
+
+    const data = (await res.json()) as {
+      sentiment?: SpikeSentimentLabel;
+      reason?: string;
+      error?: string;
+    };
+
+    if (!res.ok) {
+      console.error(`[event-study] Sentiment failed for ${entityName} @ ${date}:`, data.error);
+      return {
+        sentiment: "NEUTRAL",
+        reason: "Sentiment analysis unavailable for this date.",
+      };
+    }
+
+    const sentiment =
+      data.sentiment === "POSITIVE" ||
+      data.sentiment === "NEGATIVE" ||
+      data.sentiment === "NEUTRAL"
+        ? data.sentiment
+        : "NEUTRAL";
+
+    return {
+      sentiment,
+      reason:
+        typeof data.reason === "string" && data.reason.trim()
+          ? data.reason.trim()
+          : "No catalyst explanation returned.",
+    };
+  } catch (error) {
+    console.error(`[event-study] Sentiment request error for ${entityName} @ ${date}:`, error);
+    return {
+      sentiment: "NEUTRAL",
+      reason: "Sentiment analysis unavailable for this date.",
+    };
+  }
+}
+
+/**
+ * Run the quantitative event study, then enrich each spike with Gemini historical sentiment.
+ */
+export async function runEventStudyWithSentiment(
+  data: TrendDatum[],
+  brand: string,
+  stockKey: string,
+  spikeThreshold: number = DEFAULT_SPIKE_THRESHOLD
+): Promise<EventStudyResult> {
+  const base = runEventStudy(data, brand, stockKey, spikeThreshold);
+
+  if (base.events.length === 0) return base;
+
+  const enriched = await Promise.all(
+    base.events.map(async (event) => {
+      const { sentiment, reason } = await fetchSpikeSentiment(brand, event.date);
+      return { ...event, sentiment, reason };
+    })
+  );
+
+  return buildResult(enriched);
 }

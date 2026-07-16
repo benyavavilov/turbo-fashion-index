@@ -6,6 +6,7 @@ import type { EntityMeta } from "@/lib/entities";
 import type { ChartContext } from "@/lib/chart-context";
 
 import AiAnalyst from "./ai-analyst";
+import PaperPortfolioProvider from "./paper-portfolio-context";
 import TrendExplorer from "./trend-explorer";
 
 export default function TerminalShell({
@@ -18,13 +19,13 @@ export default function TerminalShell({
   const [chartContext, setChartContext] = useState<ChartContext | null>(null);
 
   return (
-    <>
+    <PaperPortfolioProvider>
       <TrendExplorer
         entities={entities}
         isLive={isLive}
         onChartContextChange={setChartContext}
       />
       <AiAnalyst chartContext={chartContext} />
-    </>
+    </PaperPortfolioProvider>
   );
 }

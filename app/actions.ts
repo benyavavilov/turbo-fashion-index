@@ -1,5 +1,7 @@
 "use server";
 
+import { connection } from "next/server";
+
 import { normalizeDateString } from "@/lib/chart-data";
 import type { TrendDatum } from "@/lib/chart-data";
 import { entities, type EntityMeta } from "@/lib/entities";
@@ -28,6 +30,8 @@ export interface EntityRequestInput {
 export async function submitEntityRequest(
   input: EntityRequestInput
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  await connection(); // opt out of Next.js static/request caching
+
   const name = input.name.trim();
   if (!name) {
     return { ok: false, error: "Entity name is required." };
@@ -56,13 +60,19 @@ export async function submitEntityRequest(
 }
 
 /**
- * Fetch market_metrics only for the entities the user has selected.
- * Scoped by entity_id and lifted to 10 000 rows so a full 5-year weekly
- * history fits even when comparing many series at once.
+ * Fetch market_metrics for the selected brand names.
+ * Always bypasses Next.js fetch/data cache so post-ingestion refreshes show up.
+ *
+ * Supabase/PostgREST defaults to a hard max of 1,000 rows per response even when
+ * `.limit(N)` is larger — so we page with `.range()` until we have the full
+ * multi-year timeline (up to 10,000 rows).
  */
 export async function getTrendData(
   selectedEntityNames: string[]
 ): Promise<TrendDatum[]> {
+  // Next.js 16: prefer `connection()` over deprecated `unstable_noStore()`.
+  await connection();
+
   if (selectedEntityNames.length === 0) return [];
 
   const supabase = createBrowserSupabase();
@@ -79,18 +89,31 @@ export async function getTrendData(
 
     const entityIds = entityRows.map((row) => row.id as string);
 
-    const { data: rows, error } = await supabase
-      .from("market_metrics")
-      .select(
-        "recorded_date, interest_value, tracked_entities!inner(name, category)"
-      )
-      .in("entity_id", entityIds)
-      .order("recorded_date", { ascending: true })
-      .limit(10000);
+    // PostgREST max_rows is typically 1000 — page past that ceiling.
+    const PAGE_SIZE = 1000;
+    const MAX_ROWS = 10000;
+    const allRows: MetricJoinRow[] = [];
 
-    if (error) throw error;
+    for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+      const to = Math.min(from + PAGE_SIZE - 1, MAX_ROWS - 1);
+      const { data: page, error } = await supabase
+        .from("market_metrics")
+        .select(
+          "recorded_date, interest_value, tracked_entities!inner(name, category)"
+        )
+        .in("entity_id", entityIds)
+        .order("recorded_date", { ascending: true })
+        .range(from, to)
+        .limit(10000);
 
-    return reshapeForRecharts((rows ?? []) as unknown as MetricJoinRow[]);
+      if (error) throw error;
+      if (!page?.length) break;
+
+      allRows.push(...(page as unknown as MetricJoinRow[]));
+      if (page.length < PAGE_SIZE) break;
+    }
+
+    return reshapeForRecharts(allRows);
   } catch (err) {
     console.error("[getTrendData] Failed to load market metrics:", err);
     return [];
@@ -115,7 +138,8 @@ function reshapeForRecharts(rows: MetricJoinRow[]): TrendDatum[] {
     bucket[entity.name] = row.interest_value;
   }
 
-  return Array.from(byDate.values()).sort((a, b) =>
-    a.date < b.date ? -1 : a.date > b.date ? 1 : 0
+  return Array.from(byDate.values()).sort(
+    (a, b) =>
+      new Date(a.date).getTime() - new Date(b.date).getTime()
   );
 }

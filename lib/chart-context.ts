@@ -8,6 +8,15 @@ export interface PinnedDataPoint {
   values: Record<string, number>;
 }
 
+/** Extra context when chatting from a V3 company terminal. */
+export interface CompanyPageContext {
+  parentName: string;
+  ticker: string;
+  childBrands: string[];
+  /** Human-readable catalyst briefings from the latest event study + Gemini brief. */
+  catalystBriefings: string;
+}
+
 export interface ChartContext {
   timeframe: Timeframe;
   selectedEntities: string[];
@@ -22,4 +31,5 @@ export interface ChartContext {
   observationCount: number;
   isLive: boolean;
   pinnedData?: PinnedDataPoint | null;
+  companyPage?: CompanyPageContext | null;
 }

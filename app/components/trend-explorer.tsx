@@ -20,6 +20,8 @@ import { getTrendData } from "@/app/actions";
 import EntitySelector from "@/app/components/entity-selector";
 import EntityLogo from "@/app/components/entity-logo";
 import QuantitativeTools from "@/app/components/quantitative-tools";
+import AlphaStrategiesDashboard from "@/app/components/alpha-strategies-dashboard";
+import PaperPortfolioPanel from "@/app/components/paper-portfolio-panel";
 import { getBrandTicker } from "@/lib/brand-assets";
 import type { ChartContext, PinnedDataPoint, Timeframe } from "@/lib/chart-context";
 import { getEntityByName } from "@/lib/entities";
@@ -31,7 +33,7 @@ import {
   normalizeDateString,
 } from "@/lib/chart-data";
 import { calculatePearson } from "@/lib/math";
-import { runEventStudy } from "@/lib/event-study";
+import { runEventStudyWithSentiment } from "@/lib/event-study";
 
 const PALETTE = [
   "#6366f1",
@@ -749,6 +751,7 @@ export default function TrendExplorer({
   }, [timeframe]);
 
   return (
+    <>
     <section className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-5">
       {/* Header */}
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
@@ -825,11 +828,12 @@ export default function TrendExplorer({
       <QuantitativeTools
         eventStudyEnabled={eventStudyEnabled}
         eventStudyBrand={eventStudyBrand}
-        onRunEventStudy={() =>
-          runEventStudy(
+        onRunEventStudy={(spikeThreshold) =>
+          runEventStudyWithSentiment(
             mergedForAnalysis,
             eventStudyBrand!,
-            stockKey(eventStudyBrand!)
+            stockKey(eventStudyBrand!),
+            spikeThreshold
           )
         }
       />
@@ -1013,5 +1017,11 @@ export default function TrendExplorer({
         </div>
       )}
     </section>
+
+    <div className="mt-6 space-y-6">
+      <AlphaStrategiesDashboard />
+      <PaperPortfolioPanel />
+    </div>
+    </>
   );
 }

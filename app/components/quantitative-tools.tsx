@@ -1,9 +1,94 @@
 "use client";
 
 import { useState } from "react";
-import { FlaskConical, Info, X } from "lucide-react";
+import { FlaskConical, Info, Loader2, X } from "lucide-react";
 
-import type { EventStudyResult } from "@/lib/event-study";
+import type {
+  EventStudyEvent,
+  EventStudyResult,
+  SpikeSentimentLabel,
+} from "@/lib/event-study";
+import {
+  DEFAULT_SPIKE_THRESHOLD,
+  MAX_SPIKE_THRESHOLD,
+  MIN_SPIKE_THRESHOLD,
+} from "@/lib/event-study";
+
+function formatReturn(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function sentimentBadgeClass(sentiment: SpikeSentimentLabel): string {
+  if (sentiment === "POSITIVE") {
+    return "border-emerald-500/35 bg-emerald-500/15 text-emerald-300";
+  }
+  if (sentiment === "NEGATIVE") {
+    return "border-rose-500/35 bg-rose-500/15 text-rose-300";
+  }
+  return "border-neutral-600/50 bg-neutral-800/70 text-neutral-400";
+}
+
+function EventList({
+  title,
+  subtitle,
+  events,
+  emptyLabel,
+}: {
+  title: string;
+  subtitle: string;
+  events: EventStudyEvent[];
+  emptyLabel: string;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+      <div className="mb-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-300">
+          {title}
+        </p>
+        <p className="mt-0.5 text-[11px] text-neutral-500">{subtitle}</p>
+      </div>
+
+      {events.length === 0 ? (
+        <p className="text-xs text-neutral-600">{emptyLabel}</p>
+      ) : (
+        <ul className="max-h-44 space-y-3 overflow-y-auto">
+          {events.map((event) => (
+            <li key={event.date} className="space-y-1">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono text-[11px] text-neutral-500">
+                  {event.date}
+                </span>
+                <div className="flex items-center gap-2">
+                  {event.sentiment && (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${sentimentBadgeClass(event.sentiment)}`}
+                    >
+                      {event.sentiment}
+                    </span>
+                  )}
+                  <span
+                    className={`font-mono text-xs font-medium ${
+                      event.returnPct >= 0
+                        ? "text-emerald-400/90"
+                        : "text-rose-400/90"
+                    }`}
+                  >
+                    {formatReturn(event.returnPct)}
+                  </span>
+                </div>
+              </div>
+              {event.reason && (
+                <p className="text-[11px] leading-relaxed text-neutral-500">
+                  {event.reason}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export default function QuantitativeTools({
   eventStudyEnabled,
@@ -12,15 +97,38 @@ export default function QuantitativeTools({
 }: {
   eventStudyEnabled: boolean;
   eventStudyBrand: string | null;
-  onRunEventStudy: () => EventStudyResult;
+  onRunEventStudy: (spikeThreshold: number) => Promise<EventStudyResult>;
 }) {
   const [explainTradability, setExplainTradability] = useState(false);
+  const [spikeThreshold, setSpikeThreshold] = useState(DEFAULT_SPIKE_THRESHOLD);
   const [results, setResults] = useState<EventStudyResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
-  const handleRunEventStudy = () => {
-    if (!eventStudyEnabled) return;
-    setResults(onRunEventStudy());
+  const handleRunEventStudy = async () => {
+    if (!eventStudyEnabled || running) return;
+    setRunning(true);
+    setRunError(null);
+    try {
+      const next = await onRunEventStudy(spikeThreshold);
+      setResults(next);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Event study failed.";
+      setRunError(message);
+    } finally {
+      setRunning(false);
+    }
   };
+
+  const positiveEvents =
+    results?.events.filter((e) => e.sentiment === "POSITIVE") ?? [];
+  const negativeEvents =
+    results?.events.filter((e) => e.sentiment === "NEGATIVE") ?? [];
+  const neutralEvents =
+    results?.events.filter(
+      (e) => e.sentiment === "NEUTRAL" || e.sentiment == null
+    ) ?? [];
 
   return (
     <>
@@ -68,23 +176,62 @@ export default function QuantitativeTools({
             )}
           </div>
 
-          <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+          <div className="flex w-full shrink-0 flex-col items-stretch gap-3 sm:max-w-sm sm:items-end">
+            <div className="w-full rounded-lg border border-neutral-800 bg-neutral-900/50 px-3 py-2.5">
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <label
+                  htmlFor="spike-sensitivity"
+                  className="text-xs font-medium text-neutral-300"
+                >
+                  Spike Sensitivity Threshold
+                </label>
+                <span className="font-mono text-xs text-indigo-300">
+                  {spikeThreshold} pts
+                </span>
+              </div>
+              <input
+                id="spike-sensitivity"
+                type="range"
+                min={MIN_SPIKE_THRESHOLD}
+                max={MAX_SPIKE_THRESHOLD}
+                step={1}
+                value={spikeThreshold}
+                onChange={(e) => setSpikeThreshold(Number(e.target.value))}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-neutral-700 accent-indigo-500"
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-neutral-600">
+                <span>{MIN_SPIKE_THRESHOLD}</span>
+                <span>{MAX_SPIKE_THRESHOLD}</span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-snug text-neutral-500">
+                Lower for stable retail brands, higher for volatile hype brands.
+              </p>
+            </div>
+
             <button
               type="button"
               onClick={handleRunEventStudy}
-              disabled={!eventStudyEnabled}
+              disabled={!eventStudyEnabled || running}
               title={
                 eventStudyEnabled
-                  ? `Run backtest on ${eventStudyBrand}`
+                  ? `Run backtest on ${eventStudyBrand} (≥${spikeThreshold} pts)`
                   : "Select exactly one brand with stock overlay enabled"
               }
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
             >
-              Run Event Study (90-Day Hold)
+              {running && <Loader2 className="h-4 w-4 animate-spin" />}
+              {running
+                ? "Analyzing catalysts…"
+                : "Run Event Study (90-Day Hold)"}
             </button>
             {!eventStudyEnabled && (
               <p className="max-w-xs text-right text-[11px] text-neutral-600">
                 Requires one brand with stock overlay active
+              </p>
+            )}
+            {runError && (
+              <p className="max-w-xs text-right text-[11px] text-rose-400">
+                {runError}
               </p>
             )}
           </div>
@@ -103,7 +250,7 @@ export default function QuantitativeTools({
             role="dialog"
             aria-modal
             aria-labelledby="event-study-title"
-            className="relative w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-950 p-5 shadow-2xl"
+            className="relative max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950 p-5 shadow-2xl"
           >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
@@ -115,7 +262,7 @@ export default function QuantitativeTools({
                 </h3>
                 {eventStudyBrand && (
                   <p className="mt-0.5 text-xs text-neutral-500">
-                    {eventStudyBrand} · 90-day hold
+                    {eventStudyBrand} · 90-day hold · Long / Short by catalyst
                   </p>
                 )}
               </div>
@@ -128,13 +275,13 @@ export default function QuantitativeTools({
               </button>
             </div>
 
-            <p className="text-sm leading-relaxed text-neutral-300">
+            <p className="mb-4 text-sm leading-relaxed text-neutral-300">
               Identified{" "}
               <span className="font-semibold text-neutral-100">
                 {results.eventCount}
               </span>{" "}
-              major hype spike{results.eventCount === 1 ? "" : "s"}. Average
-              90-day post-spike stock return:{" "}
+              major hype spike{results.eventCount === 1 ? "" : "s"}. Overall
+              average 90-day post-spike stock return:{" "}
               <span
                 className={`font-mono font-semibold ${
                   results.averageReturnPct >= 0
@@ -142,36 +289,71 @@ export default function QuantitativeTools({
                     : "text-rose-400"
                 }`}
               >
-                {results.averageReturnPct >= 0 ? "+" : ""}
-                {results.averageReturnPct.toFixed(1)}%
+                {formatReturn(results.averageReturnPct)}
               </span>
               .
             </p>
 
-            {results.events.length > 0 && (
-              <ul className="mt-4 max-h-48 space-y-2 overflow-y-auto border-t border-neutral-800 pt-3">
-                {results.events.map((event) => (
-                  <li
-                    key={event.date}
-                    className="flex items-center justify-between text-xs text-neutral-400"
-                  >
-                    <span className="font-mono text-neutral-500">
-                      {event.date}
-                    </span>
-                    <span
-                      className={`font-mono font-medium ${
-                        event.returnPct >= 0
-                          ? "text-emerald-400/90"
-                          : "text-rose-400/90"
-                      }`}
-                    >
-                      {event.returnPct >= 0 ? "+" : ""}
-                      {event.returnPct.toFixed(1)}%
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400/80">
+                  Long · Positive Catalysts
+                </p>
+                <p className="mt-1 text-sm text-neutral-200">
+                  {results.positiveEventCount} event
+                  {results.positiveEventCount === 1 ? "" : "s"}
+                </p>
+                <p className="mt-0.5 font-mono text-lg font-semibold text-emerald-300">
+                  {results.positiveAverageReturnPct != null
+                    ? formatReturn(results.positiveAverageReturnPct)
+                    : "—"}
+                </p>
+                <p className="text-[11px] text-neutral-500">
+                  Avg 90-day return
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-400/80">
+                  Short · Negative Catalysts
+                </p>
+                <p className="mt-1 text-sm text-neutral-200">
+                  {results.negativeEventCount} event
+                  {results.negativeEventCount === 1 ? "" : "s"}
+                </p>
+                <p className="mt-0.5 font-mono text-lg font-semibold text-rose-300">
+                  {results.negativeAverageReturnPct != null
+                    ? formatReturn(results.negativeAverageReturnPct)
+                    : "—"}
+                </p>
+                <p className="text-[11px] text-neutral-500">
+                  Avg 90-day return
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <EventList
+                title="Positive Catalyst Events"
+                subtitle="Long strategy candidates"
+                events={positiveEvents}
+                emptyLabel="No positive-catalyst spikes identified."
+              />
+              <EventList
+                title="Negative Catalyst Events"
+                subtitle="Short strategy candidates"
+                events={negativeEvents}
+                emptyLabel="No negative-catalyst spikes identified."
+              />
+              {neutralEvents.length > 0 && (
+                <EventList
+                  title="Neutral / Uncertain"
+                  subtitle="Catalyst unclear from historical knowledge"
+                  events={neutralEvents}
+                  emptyLabel=""
+                />
+              )}
+            </div>
 
             <div className="mt-5 flex justify-end">
               <button

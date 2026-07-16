@@ -22,6 +22,19 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Kill Recharts SVG focus rings + default blue selection chrome */
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-surface:focus,
+.recharts-surface:focus-visible {
+  outline: none !important;
+}
+
+/* Keep fill transparent (area cursor bloating) but allow stroke from Tooltip cursor prop */
+.recharts-tooltip-cursor {
+  fill: transparent !important;
+}
+
 /* Thin, subtle scrollbars to match the analytical aesthetic */
 * {
   scrollbar-width: thin;
