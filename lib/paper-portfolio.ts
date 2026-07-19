@@ -77,7 +77,9 @@ export function isBullishVerdict(verdict: string): boolean {
   return (
     v.includes("BUY") ||
     v.includes("LONG") ||
-    v.includes("ACCUMULATE")
+    v.includes("ACCUMULATE") ||
+    v.includes("PROJECTED UP") ||
+    v === "UP"
   );
 }
 
@@ -87,6 +89,8 @@ export function isBearishVerdict(verdict: string): boolean {
     v.includes("SHORT") ||
     v.includes("SELL") ||
     v.includes("CUT") ||
-    v.includes("EXIT")
+    v.includes("EXIT") ||
+    v.includes("PROJECTED DOWN") ||
+    v === "DOWN"
   );
 }

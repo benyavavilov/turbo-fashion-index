@@ -24,6 +24,13 @@ import { getTrendData } from "@/app/actions";
 import CompanyChat from "@/app/components/company-chat";
 import type { ParentCompany } from "@/lib/entities";
 import {
+  INSIGHT_BULLET_LABELS,
+  INSIGHT_GENERATING_FALLBACK,
+  directionToKind,
+  type CompanyBrief,
+  type InsightDirection,
+} from "@/lib/ai-insights";
+import {
   filterByTimeframe,
   groupAndAlignChartData,
   mergeStockPrices,
@@ -33,8 +40,6 @@ import {
 import type { ChartContext, Timeframe } from "@/lib/chart-context";
 import {
   runEventStudy,
-  runEventStudyWithSentiment,
-  type EventStudyEvent,
   type EventStudyResult,
 } from "@/lib/event-study";
 import { formatUsd } from "@/lib/paper-portfolio";
@@ -85,14 +90,6 @@ function sortByDateAsc<T extends { date: string }>(rows: T[]): T[] {
       new Date(normalizeDateString(String(a.date))).getTime() -
       new Date(normalizeDateString(String(b.date))).getTime()
   );
-}
-
-function sentimentClass(s?: string) {
-  if (s === "POSITIVE")
-    return "border-emerald-500/35 bg-emerald-500/15 text-emerald-300";
-  if (s === "NEGATIVE")
-    return "border-rose-500/35 bg-rose-500/15 text-rose-300";
-  return "border-neutral-600/50 bg-neutral-800/70 text-neutral-300";
 }
 
 function snapToChartDate(
@@ -221,10 +218,38 @@ function CompanyChartTooltip({ active, payload, label }: ChartTooltipProps) {
   );
 }
 
+function directionBadgeClass(direction: InsightDirection | null | undefined) {
+  if (direction === "UP") {
+    return "border-emerald-500/40 bg-emerald-500/20 text-emerald-200";
+  }
+  if (direction === "DOWN") {
+    return "border-rose-500/40 bg-rose-500/20 text-rose-200";
+  }
+  if (direction === "SAFE") {
+    return "border-sky-500/35 bg-sky-500/15 text-sky-200";
+  }
+  return "border-neutral-600/50 bg-neutral-800/70 text-neutral-300";
+}
+
+function directionPanelAccent(direction: InsightDirection | null | undefined) {
+  if (direction === "UP") {
+    return "border-emerald-500/30 bg-gradient-to-b from-emerald-500/12 via-neutral-950/80 to-neutral-950";
+  }
+  if (direction === "DOWN") {
+    return "border-rose-500/30 bg-gradient-to-b from-rose-500/12 via-neutral-950/80 to-neutral-950";
+  }
+  if (direction === "SAFE") {
+    return "border-amber-500/25 bg-gradient-to-b from-sky-500/10 via-amber-500/8 to-neutral-950";
+  }
+  return "border-neutral-800/80 bg-neutral-900/40";
+}
+
 export default function CompanyTerminal({
   parent,
+  initialInsight = null,
 }: {
   parent: ParentCompany;
+  initialInsight?: CompanyBrief | null;
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
   const [activeBrands, setActiveBrands] = useState<string[]>(
@@ -236,16 +261,10 @@ export default function CompanyTerminal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [briefLoading, setBriefLoading] = useState(false);
-  const [brief, setBrief] = useState<{
-    headline: string;
-    sentiment: string;
-    bullets: string[];
-  } | null>(null);
+  const [insight] = useState<CompanyBrief | null>(initialInsight);
   const [studies, setStudies] = useState<
     { brand: string; result: EventStudyResult }[]
   >([]);
-  const [studyLoading, setStudyLoading] = useState(false);
 
   const loadMarket = useCallback(async () => {
     setLoading(true);
@@ -276,6 +295,14 @@ export default function CompanyTerminal({
       const dates = [...map.keys()].sort();
       const latest = dates.at(-1);
       setLastPrice(latest ? (map.get(latest) ?? null) : null);
+
+      // Local event-study markers only (no live Gemini).
+      const merged = mergeStockPrices(trends, map, STOCK_KEY);
+      const studyResults = parent.childBrands.map((brand) => ({
+        brand,
+        result: runEventStudy(merged, brand, STOCK_KEY),
+      }));
+      setStudies(studyResults.filter((s) => s.result.eventCount > 0));
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to load market data"
@@ -360,23 +387,18 @@ export default function CompanyTerminal({
   const chartContext = useMemo((): ChartContext => {
     const briefingParts: string[] = [];
 
-    if (brief) {
+    if (insight?.found) {
       briefingParts.push(
-        `Analyst brief (${brief.sentiment}): ${brief.headline}`,
-        ...brief.bullets.map((b) => `• ${b}`)
+        `Cached insight (${insight.direction ?? insight.sentiment}): ${insight.heroText}`,
+        ...insight.bullets.map((b, i) => {
+          const label = INSIGHT_BULLET_LABELS[i] ?? `Point ${i + 1}`;
+          return `• ${label}: ${b}`;
+        })
       );
     }
 
     for (const { brand, result } of studies) {
-      const dated = result.events
-        .filter((e: EventStudyEvent) => e.reason || e.sentiment)
-        .map(
-          (e) =>
-            `${e.date} [${e.sentiment ?? "n/a"}] ${brand}: ${e.reason ?? "spike"} (90d return ${e.returnPct.toFixed(1)}%)`
-        );
-      if (dated.length) {
-        briefingParts.push(`${brand} catalysts:`, ...dated);
-      } else if (result.eventCount > 0) {
+      if (result.eventCount > 0) {
         briefingParts.push(
           `${brand}: ${result.eventCount} spikes, avg 90d return ${result.averageReturnPct.toFixed(1)}%`
         );
@@ -403,7 +425,7 @@ export default function CompanyTerminal({
   }, [
     activeBrands,
     baseChartData,
-    brief,
+    insight,
     chartData.length,
     parent.childBrands,
     parent.name,
@@ -420,79 +442,6 @@ export default function CompanyTerminal({
       }
       return [...prev, brand];
     });
-  };
-
-  const runAnalyst = async () => {
-    if (briefLoading || studyLoading) return;
-    setBriefLoading(true);
-    setStudyLoading(true);
-    setBrief(null);
-
-    try {
-      const merged = mergeStockPrices(trendRows, stockMap, STOCK_KEY);
-      const activeSet = new Set(activeBrands);
-
-      const studyResults = await Promise.all(
-        parent.childBrands.map(async (brand) => {
-          if (activeSet.has(brand)) {
-            const result = await runEventStudyWithSentiment(
-              merged,
-              brand,
-              STOCK_KEY
-            );
-            return { brand, result };
-          }
-          return {
-            brand,
-            result: runEventStudy(merged, brand, STOCK_KEY),
-          };
-        })
-      );
-
-      const withEvents = studyResults.filter((s) => s.result.eventCount > 0);
-      setStudies(withEvents);
-      setStudyLoading(false);
-
-      const summary = withEvents
-        .map(({ brand, result }) => {
-          const latest = [...result.events].sort((a, b) =>
-            b.date.localeCompare(a.date)
-          )[0];
-          return (
-            `${brand}: ${result.eventCount} spikes, avg ${result.averageReturnPct.toFixed(1)}% 90d` +
-            (latest?.sentiment
-              ? `, latest ${latest.sentiment} (${latest.reason ?? ""})`
-              : "")
-          );
-        })
-        .join("\n");
-
-      const res = await fetch("/api/company-brief", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: parent.ticker,
-          eventStudySummary: summary,
-        }),
-      });
-      const data = (await res.json()) as {
-        headline?: string;
-        sentiment?: string;
-        bullets?: string[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Brief failed");
-      setBrief({
-        headline: data.headline ?? `${parent.name} brief`,
-        sentiment: data.sentiment ?? "NEUTRAL",
-        bullets: data.bullets ?? [],
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Analyst failed");
-      setStudyLoading(false);
-    } finally {
-      setBriefLoading(false);
-    }
   };
 
   return (
@@ -718,7 +667,9 @@ export default function CompanyTerminal({
           </div>
         </section>
 
-        <aside className="flex flex-col rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-5">
+        <aside
+          className={`flex flex-col rounded-xl border p-5 ${directionPanelAccent(insight?.direction)}`}
+        >
           <div className="mb-4 flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/15 ring-1 ring-inset ring-violet-500/30">
               <Bot className="h-5 w-5 text-violet-300" />
@@ -728,51 +679,86 @@ export default function CompanyTerminal({
                 AI Analyst
               </h3>
               <p className="text-xs text-neutral-500">
-                Gemini sentiment on {parent.name} + child brand momentum
+                Pre-computed insight for ${parent.ticker}
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void runAnalyst()}
-            disabled={briefLoading || loading || trendRows.length === 0}
-            className="mb-4 inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {briefLoading || studyLoading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Bot className="h-3.5 w-3.5" />
-            )}
-            {briefLoading || studyLoading
-              ? "Running event study + brief…"
-              : "Analyze Parent & Brands"}
-          </button>
+          {insight?.found ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${directionBadgeClass(insight.direction)}`}
+                >
+                  {insight.direction
+                    ? directionToKind(insight.direction)
+                    : insight.sentiment}
+                </span>
+                {insight.confidenceLabel && (
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-wide ${
+                      (insight.confidenceScore ?? 0) >= 8
+                        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+                        : (insight.confidenceScore ?? 0) <= 4
+                          ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
+                          : "border-indigo-500/40 bg-indigo-500/15 text-indigo-200"
+                    }`}
+                    title={insight.confidenceReason ?? undefined}
+                  >
+                    {insight.confidenceLabel}
+                  </span>
+                )}
+                {insight.dataPoint && (
+                  <span className="rounded-md border border-neutral-700/80 bg-neutral-900/80 px-2 py-1 font-mono text-[11px] text-neutral-300">
+                    {insight.dataPoint}
+                  </span>
+                )}
+              </div>
 
-          {brief ? (
-            <div className="space-y-3">
-              <span
-                className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold ${sentimentClass(brief.sentiment)}`}
-              >
-                {brief.sentiment}
-              </span>
-              <h4 className="text-sm font-semibold text-neutral-100">
-                {brief.headline}
+              <h4 className="text-sm font-semibold leading-snug text-neutral-50">
+                {insight.heroText}
               </h4>
-              <ul className="space-y-2 text-xs leading-relaxed text-neutral-400">
-                {brief.bullets.map((b, i) => (
-                  <li key={i} className="flex gap-2">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-violet-400/80" />
-                    <span>{b}</span>
+
+              {insight.confidenceReason && (
+                <p className="text-[11px] leading-snug text-neutral-500">
+                  {insight.confidenceReason}
+                </p>
+              )}
+
+              {insight.brand && insight.brand !== parent.name && (
+                <p className="text-[11px] text-neutral-500">
+                  Child signals:{" "}
+                  <span className="text-neutral-400">{insight.brand}</span>
+                </p>
+              )}
+
+              <ul className="space-y-3">
+                {insight.bullets.map((b, i) => (
+                  <li key={i} className="text-xs leading-relaxed">
+                    <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                      {INSIGHT_BULLET_LABELS[i] ?? `Point ${i + 1}`}
+                    </p>
+                    <p className="text-neutral-300">{b}</p>
                   </li>
                 ))}
               </ul>
+
+              {insight.generatedAt && (
+                <p className="pt-1 text-[10px] uppercase tracking-wider text-neutral-600">
+                  Cached{" "}
+                  {new Date(insight.generatedAt).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </p>
+              )}
             </div>
           ) : (
-            <p className="text-xs leading-relaxed text-neutral-500">
-              Run analysis to plot catalyst markers on the chart and generate a
-              Gemini company brief. Active toggles get full sentiment enrichment.
-            </p>
+            <div className="rounded-lg border border-dashed border-neutral-700/80 bg-neutral-950/40 px-4 py-6 text-center">
+              <p className="text-sm leading-relaxed text-neutral-400">
+                {INSIGHT_GENERATING_FALLBACK}
+              </p>
+            </div>
           )}
 
           {studies.length > 0 && (

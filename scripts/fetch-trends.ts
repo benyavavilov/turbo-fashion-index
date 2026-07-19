@@ -12,6 +12,10 @@
  * Run with:  npm run fetch:trends
  * (loads .env.local via Node's --env-file flag; see package.json)
  *
+ * After a successful trends pull, refresh AI cards with:
+ *   npm run generate:insights
+ * Or run both:  npm run etl
+ *
  * Expected Supabase schema (see comments at the bottom of this file):
  *   tracked_entities(id uuid pk default gen_random_uuid(), name text unique, category text)
  *   market_metrics(id uuid pk default gen_random_uuid(), entity_id uuid fk,
@@ -19,8 +23,10 @@
  *                  unique(entity_id, recorded_date))
  */
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import googleTrends from "google-trends-api";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { entities } from "../lib/entities";
 
@@ -57,23 +63,40 @@ const TRACKED_ENTITIES = entities.map(({ name, category }) => ({
 
 type TrackedEntity = (typeof TRACKED_ENTITIES)[number];
 
+export interface FetchTrendsResult {
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  totalRows: number;
+  elapsedSec: number;
+}
+
+export interface FetchTrendsOptions {
+  /** When true, refresh every entity even if history looks fresh (weekly cron). */
+  forceRefresh?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Supabase client (service role -> bypasses Row-Level Security for backend writes)
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let supabaseClient: SupabaseClient | null = null;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error(
-    "Missing Supabase credentials. Ensure NEXT_PUBLIC_SUPABASE_URL and " +
-      "SUPABASE_SERVICE_ROLE_KEY are set in .env.local."
-  );
+function getSupabase(): SupabaseClient {
+  if (supabaseClient) return supabaseClient;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error(
+      "Missing Supabase credentials. Ensure NEXT_PUBLIC_SUPABASE_URL and " +
+        "SUPABASE_SERVICE_ROLE_KEY are set."
+    );
+  }
+  supabaseClient = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseClient;
 }
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
 
 // ---------------------------------------------------------------------------
 // Types describing the Google Trends payload we care about
@@ -125,7 +148,7 @@ function historyWindow(): { startTime: Date; endTime: Date } {
 async function seedEntities(): Promise<Map<string, string>> {
   console.log(`\n[1/2] Seeding ${TRACKED_ENTITIES.length} tracked entities...`);
 
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from("tracked_entities")
     .upsert(TRACKED_ENTITIES, { onConflict: "name" })
     .select("id, name");
@@ -151,7 +174,7 @@ async function seedEntities(): Promise<Map<string, string>> {
 async function existingMetricFreshness(
   entityId: string
 ): Promise<{ count: number; latestDate: string | null }> {
-  const { count, error: countError } = await supabase
+  const { count, error: countError } = await getSupabase()
     .from("market_metrics")
     .select("id", { count: "exact", head: true })
     .eq("entity_id", entityId);
@@ -161,7 +184,7 @@ async function existingMetricFreshness(
     return { count: 0, latestDate: null };
   }
 
-  const { data: latestRows, error: latestError } = await supabase
+  const { data: latestRows, error: latestError } = await getSupabase()
     .from("market_metrics")
     .select("recorded_date")
     .eq("entity_id", entityId)
@@ -275,7 +298,7 @@ async function fetchMetricsWithRetry(
 async function persistMetrics(rows: MetricRow[]): Promise<void> {
   if (rows.length === 0) return;
 
-  const { error } = await supabase
+  const { error } = await getSupabase()
     .from("market_metrics")
     .upsert(rows, { onConflict: "entity_id, recorded_date" });
 
@@ -285,12 +308,22 @@ async function persistMetrics(rows: MetricRow[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Pipeline entry (CLI + Vercel Cron)
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
+/**
+ * Fetch Google Trends for all tracked entities and upsert into Supabase.
+ * Shared by `npm run fetch:trends` and `/api/cron`.
+ */
+export async function runFetchTrends(
+  options: FetchTrendsOptions = {}
+): Promise<FetchTrendsResult> {
+  const { forceRefresh = false } = options;
   const startedAt = Date.now();
   console.log("=== TurboFashion Index :: Trends ingestion ===");
+  if (forceRefresh) {
+    console.log("  (forceRefresh: skipping freshness short-circuit)");
+  }
 
   const idByName = await seedEntities();
   const { startTime, endTime } = historyWindow();
@@ -316,20 +349,21 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // Smart resumption: skip only when volume is high AND last point is recent.
-    const { count: existing, latestDate } =
-      await existingMetricFreshness(entityId);
-    if (isTrendHistoryFresh(existing, latestDate)) {
-      skipped++;
-      console.log(
-        `  ${position}  Skipping ${entity.name} - Data already fresh (${existing} points, latest ${latestDate}).`
-      );
-      continue;
-    }
-    if (existing > FRESH_DATA_THRESHOLD && latestDate) {
-      console.log(
-        `  ${position}  Refreshing ${entity.name} - volume ok (${existing}) but stale (latest ${latestDate}).`
-      );
+    if (!forceRefresh) {
+      const { count: existing, latestDate } =
+        await existingMetricFreshness(entityId);
+      if (isTrendHistoryFresh(existing, latestDate)) {
+        skipped++;
+        console.log(
+          `  ${position}  Skipping ${entity.name} - Data already fresh (${existing} points, latest ${latestDate}).`
+        );
+        continue;
+      }
+      if (existing > FRESH_DATA_THRESHOLD && latestDate) {
+        console.log(
+          `  ${position}  Refreshing ${entity.name} - volume ok (${existing}) but stale (latest ${latestDate}).`
+        );
+      }
     }
 
     let fetchedThisEntity = false;
@@ -354,8 +388,6 @@ async function main(): Promise<void> {
       console.error(`  ${position}  ${entity.name.padEnd(16)} -> FAILED: ${message}`);
     }
 
-    // Humanized jitter: only pause when we actually hit the network, and never
-    // after the final entity.
     if (fetchedThisEntity && i < TRACKED_ENTITIES.length - 1) {
       const delay = randomJitterMs();
       console.log(`      … waiting ${(delay / 1000).toFixed(1)}s (jitter)`);
@@ -363,21 +395,35 @@ async function main(): Promise<void> {
     }
   }
 
-  const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const elapsedSec = (Date.now() - startedAt) / 1000;
   console.log("\n=== Ingestion complete ===");
   console.log(`  Entities OK      : ${succeeded}`);
   console.log(`  Entities skipped : ${skipped}`);
   console.log(`  Entities KO      : ${failed}`);
   console.log(`  Data points      : ${totalRows}`);
-  console.log(`  Elapsed          : ${elapsed}s`);
+  console.log(`  Elapsed          : ${elapsedSec.toFixed(1)}s`);
+
+  return { succeeded, skipped, failed, totalRows, elapsedSec };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error("\nFatal error during ingestion:", err);
-    process.exit(1);
-  });
+function isExecutedDirectly(metaUrl: string): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return pathToFileURL(path.resolve(entry)).href === metaUrl;
+  } catch {
+    return entry.replace(/\\/g, "/").includes("/scripts/fetch-trends");
+  }
+}
+
+if (isExecutedDirectly(import.meta.url)) {
+  runFetchTrends()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error("\nFatal error during ingestion:", err);
+      process.exit(1);
+    });
+}
 
 /*
 -- Supabase schema this engine expects. Run once in the SQL editor:

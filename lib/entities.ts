@@ -96,12 +96,6 @@ export const parentCompanies: ParentCompany[] = [
     domain: "richemont.com",
   },
   {
-    name: "Etsy",
-    ticker: "ETSY",
-    childBrands: ["Depop"],
-    domain: "etsy.com",
-  },
-  {
     name: "Nike",
     ticker: "NKE",
     childBrands: ["Nike", "Jordan", "Converse"],

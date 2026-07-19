@@ -22,7 +22,6 @@ export const ENTITY_DOMAIN_MAP: Record<string, string> = {
   Columbia: "columbia.com",
   Coach: "coach.com",
   Converse: "converse.com",
-  Depop: "depop.com",
   Dickies: "dickies.com",
   Dockers: "dockers.com",
   Eastpak: "eastpak.com",

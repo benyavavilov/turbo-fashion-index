@@ -3,10 +3,16 @@ import { notFound } from "next/navigation";
 import CompanyTerminal from "@/app/components/company-terminal";
 import TerminalChrome from "@/app/components/terminal-chrome";
 import {
+  selectBriefForTicker,
+  type AiInsightRow,
+  type CompanyBrief,
+} from "@/lib/ai-insights";
+import {
   getParentByTicker,
   listParentCompanies,
   normalizeTickerParam,
 } from "@/lib/entities";
+import { createBrowserSupabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +36,19 @@ export async function generateMetadata({
   };
 }
 
+async function loadCachedInsight(ticker: string): Promise<CompanyBrief | null> {
+  const supabase = createBrowserSupabase();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("ai_insights")
+    .select("*")
+    .eq("ticker", ticker);
+
+  if (error || !data?.length) return null;
+  return selectBriefForTicker(data as AiInsightRow[], ticker);
+}
+
 export default async function CompanyPage({
   params,
 }: {
@@ -41,11 +60,13 @@ export default async function CompanyPage({
 
   if (!parent) notFound();
 
+  const insight = await loadCachedInsight(ticker);
+
   return (
     <div className="min-h-screen bg-neutral-950">
       <TerminalChrome subtitle={`${parent.name} · Parent Terminal`} />
       <main className="mx-auto max-w-[1600px] p-6">
-        <CompanyTerminal parent={parent} />
+        <CompanyTerminal parent={parent} initialInsight={insight} />
       </main>
     </div>
   );
