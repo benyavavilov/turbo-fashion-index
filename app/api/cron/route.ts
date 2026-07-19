@@ -5,7 +5,7 @@ import { runGenerateInsights } from "@/scripts/generate-insights";
 
 export const runtime = "nodejs";
 /** Weekly ETL can run long (Trends jitter + Gemini). Requires Pro / Fluid. */
-export const maxDuration = 800;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 function authorizeCron(request: Request): boolean {
