@@ -252,9 +252,7 @@ export default function CompanyTerminal({
   initialInsight?: CompanyBrief | null;
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
-  const [activeBrands, setActiveBrands] = useState<string[]>(
-    parent.childBrands.slice(0, Math.min(2, parent.childBrands.length))
-  );
+  const [activeBrands, setActiveBrands] = useState<string[]>([]);
   const [trendRows, setTrendRows] = useState<TrendDatum[]>([]);
   const [stockMap, setStockMap] = useState<Map<string, number>>(new Map());
   const [lastPrice, setLastPrice] = useState<number | null>(null);
