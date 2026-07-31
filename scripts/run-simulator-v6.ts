@@ -1,13 +1,12 @@
 /**
- * run-simulator.ts — V5 Walk-Forward Portfolio Simulator
+ * run-simulator-v6.ts — V6 Experimental Walk-Forward Simulator
  *
- * Hybrid Capital Allocation + Rolling Window path-dependency batch:
- * 20% max position size, opportunity-cost replacement exits, T-Bill yield,
- * and shifts [0,1,2,4,8,12,26] weeks to test consistency across start dates.
+ * A/B test layer on top of V5: pyramiding (scale-in), partial trim at +40%,
+ * and a 15% trailing stop-loss. Leaves scripts/run-simulator.ts (V5) untouched.
  *
  * Run with:
- *   npm run simulate
- *   npx tsx --env-file=.env.local scripts/run-simulator.ts
+ *   npm run simulate:v6
+ *   npx tsx --env-file=.env.local scripts/run-simulator-v6.ts
  */
 
 import * as fs from "fs";
@@ -31,6 +30,8 @@ import {
 // ---------------------------------------------------------------------------
 
 const YEARS_BACK = 5;
+/** First year of history is reserved for YoY baseline; trade the last 4y. */
+const SIM_YEARS = 4;
 const SPX_TICKER = "^GSPC";
 const MA_WEEKS = 4;
 const YOY_LAG_WEEKS = 52;
@@ -46,17 +47,16 @@ const EARLY_EXIT_YOY_THRESHOLD = 0;
 /** Post-sell cooldown before re-buying the same brand (~4 weeks). */
 const COOLDOWN_WEEKS = 4;
 const COOLDOWN_DAYS = 30;
-/** Hard cap: a single trade never exceeds this fraction of total portfolio. */
-const MAX_POSITION_PCT = 0.2;
-/**
- * Opportunity-cost replacement: new trigger YoY must beat weakest held YoY
- * by at least this many percentage points (e.g. +40% vs +5% → gap 35).
- */
-const OPPORTUNITY_YOY_GAP = 15;
-/** Skip / replace only when deployable cash is below this fraction of the 20% slot. */
-const CASH_STARVED_FRACTION = 0.1;
+/** Hard cap: never put more than this fraction of portfolio into one name. */
+const MAX_POSITION_PCT = 0.3;
 /** Round-trip trading friction (applied on each buy and each sell). */
 const SLIPPAGE_RATE = 0.002;
+/** V6: minimum idle cash required to pyramid / scale in. */
+const MIN_SCALE_IN_CASH = 1_000;
+/** V6: take partial profits once unrealized gain hits this multiple of entry. */
+const TRIM_GAIN_MULTIPLE = 1.4;
+/** V6: full exit if price falls this fraction below the peak. */
+const TRAILING_STOP_FRACTION = 0.85;
 const YAHOO_PAUSE_MS = 500;
 
 const STARTING_CAPITAL = 10_000;
@@ -90,9 +90,10 @@ interface OpenPosition {
   parentName: string;
   /** First purchase date (for Days Held reporting). */
   originalEntryDate: string;
-  /** Timer clock for the 90-day max hold (reset by Rolling Catalyst). */
+  /** Timer clock for the 90-day max hold (reset on pyramid scale-in). */
   entryDate: string;
   entryWeekIdx: number;
+  /** Blended average cost basis per share. */
   entryPrice: number;
   shares: number;
   cost: number;
@@ -100,13 +101,18 @@ interface OpenPosition {
   yoyGrowthPct: number;
   correlation: number;
   convictionScore: number;
+  /** Peak mark since entry (for trailing stop). */
+  highestPriceReached: number;
+  /** True after a +40% partial trim has been taken. */
+  hasTrimmed?: boolean;
 }
 
 type ExitReason =
   | "max_hold"
   | "early_yoy"
   | "forced_eod"
-  | "opportunity_replace";
+  | "stop_loss"
+  | "partial_trim";
 
 interface ClosedTrade {
   ticker: string;
@@ -126,8 +132,6 @@ interface ClosedTrade {
   correlation: number;
   feesPaid: number;
   exitReason: ExitReason;
-  /** Present when exitReason === opportunity_replace. */
-  replacedByBrand?: string;
 }
 
 interface WeekTrigger {
@@ -449,15 +453,24 @@ function closePosition(input: {
   exitBar: WeeklyBar;
   spxBars: WeeklyBar[];
   exitReason: ExitReason;
-  replacedByBrand?: string;
+  /** Defaults to full position. */
+  sharesToSell?: number;
+  /** Cost basis allocated to this exit slice. */
+  costSlice?: number;
+  /** Entry fees allocated to this exit slice. */
+  buyFeeSlice?: number;
 }): { trade: ClosedTrade; sellFee: number; netProceeds: number } {
-  const { pos, exitBar, spxBars, exitReason, replacedByBrand } = input;
-  const grossProceeds = pos.shares * exitBar.close;
+  const { pos, exitBar, spxBars, exitReason } = input;
+  const sharesToSell = input.sharesToSell ?? pos.shares;
+  const costSlice = input.costSlice ?? pos.cost;
+  const buyFeeSlice = input.buyFeeSlice ?? pos.buyFee;
+
+  const grossProceeds = sharesToSell * exitBar.close;
   const sellFee = grossProceeds * SLIPPAGE_RATE;
   const proceeds = grossProceeds - sellFee;
-  const feesPaid = pos.buyFee + sellFee;
-  const pnl = proceeds - pos.cost - pos.buyFee;
-  const invested = pos.cost + pos.buyFee;
+  const feesPaid = buyFeeSlice + sellFee;
+  const pnl = proceeds - costSlice - buyFeeSlice;
+  const invested = costSlice + buyFeeSlice;
   const returnPct = pctReturn(invested, proceeds);
   const daysHeld = Math.max(
     0,
@@ -484,7 +497,7 @@ function closePosition(input: {
       daysHeld,
       entryPrice: pos.entryPrice,
       exitPrice: exitBar.close,
-      cost: pos.cost,
+      cost: costSlice,
       proceeds,
       pnl,
       returnPct,
@@ -494,25 +507,8 @@ function closePosition(input: {
       correlation: pos.correlation,
       feesPaid,
       exitReason,
-      replacedByBrand,
     },
   };
-}
-
-function exitReasonLabel(t: ClosedTrade): string {
-  switch (t.exitReason) {
-    case "early_yoy":
-      return "Early YoY crash";
-    case "forced_eod":
-      return "Forced end-of-sim";
-    case "opportunity_replace":
-      return t.replacedByBrand
-        ? `Replaced by stronger signal (${t.replacedByBrand})`
-        : "Replaced by stronger signal";
-    case "max_hold":
-    default:
-      return "Max hold (90d)";
-  }
 }
 
 function csvEscape(value: string): string {
@@ -544,13 +540,12 @@ function exportUltimateReportCsv(
   outPath: string
 ): void {
   const lines: string[] = [
-    "=== TURBO FASHION INDEX: ULTIMATE SIMULATION REPORT ===",
+    "=== TURBO FASHION INDEX: V6 EXPERIMENTAL ===",
     `Starting Capital:, ${fmtCsvUsd(summary.startingCapital)}`,
     `Final Portfolio Value:, ${fmtCsvUsd(summary.finalPortfolioValue)}`,
-    `V5 Hybrid Strategy Return:, ${fmtCsvPct(summary.strategyReturnPct)}`,
+    `V6 Strategy Return:, ${fmtCsvPct(summary.strategyReturnPct)}`,
     `S&P 500 Benchmark:, ${fmtCsvPct(summary.spxReturnPct)}`,
     `Alpha Generated:, ${fmtCsvPct(summary.alphaPct)}`,
-    `Max Position Size:, ${MAX_POSITION_PCT * 100}% of portfolio`,
     `Portfolio Beta:, ${
       summary.portfolioBeta != null && Number.isFinite(summary.portfolioBeta)
         ? summary.portfolioBeta.toFixed(2)
@@ -580,7 +575,6 @@ function exportUltimateReportCsv(
       "Return (%)",
       "Alpha (%)",
       "PnL ($)",
-      "Exit Reason",
     ].join(","),
   ];
 
@@ -600,7 +594,6 @@ function exportUltimateReportCsv(
         fmtCsvNumber(t.returnPct, 2),
         fmtCsvNumber(t.alphaPct, 2),
         fmtCsvNumber(t.pnl, 2),
-        csvEscape(exitReasonLabel(t)),
       ].join(",")
     );
 
@@ -608,443 +601,54 @@ function exportUltimateReportCsv(
 }
 
 /**
- * Live YoY search growth for an open position as of weekDate (null if N/A).
+ * Proportional conviction weights with a hard 30% portfolio cap per name.
+ * Leftover cash after capping is retained as a risk buffer.
  */
-function liveYoYForPosition(
-  pos: OpenPosition,
-  brands: BrandSeries[],
-  weekDate: string
-): number | null {
-  const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
-  if (!brandSeries) return null;
-  const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
-  if (idx == null) return null;
-  return yoyGrowthAt(brandSeries.series, idx);
-}
-
-/**
- * Hybrid Capital Allocation (Solution A):
- * Each new trade is sized to min(available cash, 20% of total portfolio value).
- * No full-cash sweep across triggers.
- */
-function sizeHybridAllocation(
+function allocateByConviction(
+  buyable: { signal: WeekTrigger; entryBar: WeeklyBar }[],
   cash: number,
   portfolioValue: number
-): number {
-  if (cash <= 0 || portfolioValue <= 0) return 0;
-  const maxAllocation = portfolioValue * MAX_POSITION_PCT;
-  const deployable = cash / (1 + SLIPPAGE_RATE);
-  return Math.min(maxAllocation, deployable);
-}
+): { signal: WeekTrigger; entryBar: WeeklyBar; allocation: number }[] {
+  if (buyable.length === 0 || cash <= 0 || portfolioValue <= 0) return [];
 
-function isCashStarved(cash: number, portfolioValue: number): boolean {
-  if (portfolioValue <= 0) return true;
-  const maxAllocation = portfolioValue * MAX_POSITION_PCT;
-  const deployable = cash / (1 + SLIPPAGE_RATE);
-  return deployable < Math.max(1, maxAllocation * CASH_STARVED_FRACTION);
+  const maxPerPos = MAX_POSITION_PCT * portfolioValue;
+  const scored = buyable.map((b) => ({
+    ...b,
+    score: Math.max(b.signal.convictionScore, 0),
+  }));
+  const totalScore = scored.reduce((s, b) => s + b.score, 0);
+  if (totalScore <= 0) return [];
+
+  // Highest conviction first so caps favor the best setups when cash is tight.
+  scored.sort((a, b) => b.score - a.score);
+
+  const out: { signal: WeekTrigger; entryBar: WeeklyBar; allocation: number }[] =
+    [];
+  let remainingCash = cash;
+
+  for (const item of scored) {
+    if (remainingCash < 1) break;
+    const raw = cash * (item.score / totalScore);
+    const allocation = Math.min(raw, maxPerPos, remainingCash);
+    if (allocation < 1) continue;
+    out.push({
+      signal: item.signal,
+      entryBar: item.entryBar,
+      allocation,
+    });
+    remainingCash -= allocation;
+  }
+
+  return out;
 }
 
 // ---------------------------------------------------------------------------
-// Single-run walk-forward (callable with a shifted start index)
-// ---------------------------------------------------------------------------
-
-interface SimulationHistory {
-  brands: BrandSeries[];
-  spxBars: WeeklyBar[];
-  stockBarsByTicker: Map<string, WeeklyBar[]>;
-}
-
-interface SimulationResult {
-  strategyReturn: number;
-  benchmarkReturn: number;
-  winRate: number;
-  beta: number | null;
-  sharpeAnn: number | null;
-  totalTrades: number;
-  startDate: string;
-  endDate: string;
-  finalPortfolioValue: number;
-  shiftWeeks: number;
-  closed: ClosedTrade[];
-  totalInterestEarned: number;
-  totalFeesPaid: number;
-  portfolioAlpha: number;
-}
-
-/**
- * Run one walk-forward from timeline[startIndex] → end.
- * startIndex typically = 52 + shift (1y YoY buffer + path-dependency offset).
- */
-async function runSimulation(
-  startIndex: number,
-  timeline: string[],
-  historicalData: SimulationHistory,
-  options: { quiet?: boolean; shiftWeeks?: number } = {}
-): Promise<SimulationResult> {
-  const { brands, spxBars, stockBarsByTicker } = historicalData;
-  const quiet = options.quiet ?? true;
-  const shiftWeeks = options.shiftWeeks ?? 0;
-
-  if (startIndex < 0 || startIndex >= timeline.length - HOLD_WEEKS - 2) {
-    throw new Error(
-      `Invalid startIndex ${startIndex} for timeline length ${timeline.length}.`
-    );
-  }
-
-  let cash = STARTING_CAPITAL;
-  const open: OpenPosition[] = [];
-  const closed: ClosedTrade[] = [];
-  let buysExecuted = 0;
-  let totalInterestEarned = 0;
-  let totalFeesPaid = 0;
-  const lastSoldDate: Record<string, string> = {};
-
-  const portfolioWeeklyReturns: number[] = [];
-  const marketWeeklyReturns: number[] = [];
-  let previousPortfolioValue: number | null = null;
-  let previousMarketValue: number | null = null;
-
-  for (let w = startIndex; w < timeline.length; w++) {
-    const weekDate = timeline[w];
-    const isLastWeek = w === timeline.length - 1;
-
-    const startPortfolioValue =
-      cash + markToMarket(open, stockBarsByTicker, weekDate);
-    const startSpxBar =
-      nearestOnOrBefore(spxBars, weekDate) ??
-      nearestOnOrAfter(spxBars, weekDate);
-    if (previousPortfolioValue == null && startPortfolioValue > 0) {
-      previousPortfolioValue = startPortfolioValue;
-    }
-    if (
-      previousMarketValue == null &&
-      startSpxBar != null &&
-      startSpxBar.close > 0
-    ) {
-      previousMarketValue = startSpxBar.close;
-    }
-
-    if (cash > 0) {
-      const interest = cash * WEEKLY_RFR;
-      cash += interest;
-      totalInterestEarned += interest;
-    }
-
-    for (let i = open.length - 1; i >= 0; i--) {
-      const pos = open[i];
-      const weeksHeld = w - pos.entryWeekIdx;
-      const maxHoldReached =
-        weeksHeld >= HOLD_WEEKS ||
-        daysBetween(pos.entryDate, weekDate) >= HOLD_DAYS;
-
-      let earlyYoYCrash = false;
-      if (
-        !maxHoldReached &&
-        !isLastWeek &&
-        weeksHeld >= MIN_HOLD_WEEKS_BEFORE_EARLY_EXIT
-      ) {
-        const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
-        if (brandSeries) {
-          const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
-          if (idx != null) {
-            const liveYoY = yoyGrowthAt(brandSeries.series, idx);
-            if (liveYoY != null && liveYoY < EARLY_EXIT_YOY_THRESHOLD) {
-              earlyYoYCrash = true;
-            }
-          }
-        }
-      }
-
-      const shouldSell = isLastWeek || maxHoldReached || earlyYoYCrash;
-      if (!shouldSell) continue;
-
-      const bars = stockBarsByTicker.get(pos.ticker);
-      if (!bars) continue;
-      const exitBar =
-        nearestOnOrBefore(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
-      if (!exitBar) continue;
-
-      const exitReason: ExitReason =
-        isLastWeek && !maxHoldReached && !earlyYoYCrash
-          ? "forced_eod"
-          : earlyYoYCrash
-            ? "early_yoy"
-            : "max_hold";
-
-      const { trade, sellFee, netProceeds } = closePosition({
-        pos,
-        exitBar,
-        spxBars,
-        exitReason,
-      });
-      cash += netProceeds;
-      totalFeesPaid += sellFee;
-      closed.push(trade);
-      lastSoldDate[pos.brand] = weekDate;
-      open.splice(i, 1);
-    }
-
-    if (!isLastWeek) {
-      const rawTriggers: WeekTrigger[] = [];
-      for (const b of brands) {
-        const idx = seriesIndexOnOrBefore(b, weekDate);
-        if (idx == null) continue;
-
-        const yoy = yoyGrowthAt(b.series, idx);
-        if (yoy == null || yoy <= YOY_GROWTH_THRESHOLD) continue;
-
-        const stockBars = stockBarsByTicker.get(b.ticker)!;
-        const corr = correlationAsOf(b.series, stockBars, weekDate);
-        if (!Number.isFinite(corr) || corr <= MIN_POSITIVE_CORR) continue;
-
-        const score = convictionScore(yoy, corr);
-        rawTriggers.push({
-          brand: b.brand,
-          parentName: b.parentName,
-          ticker: b.ticker,
-          date: b.series[idx].date,
-          yoyGrowthPct: yoy,
-          correlation: Math.round(corr * 100) / 100,
-          convictionScore: Math.round(score * 10) / 10,
-        });
-      }
-
-      const byTicker = new Map<string, WeekTrigger>();
-      for (const t of rawTriggers) {
-        const prev = byTicker.get(t.ticker);
-        if (!prev || t.convictionScore > prev.convictionScore) {
-          byTicker.set(t.ticker, t);
-        }
-      }
-
-      const candidates = [...byTicker.values()].sort(
-        (a, b) => b.convictionScore - a.convictionScore
-      );
-
-      const heldByTicker = new Map(open.map((p) => [p.ticker, p]));
-      const ordered = [...candidates].sort(
-        (a, b) =>
-          b.yoyGrowthPct - a.yoyGrowthPct ||
-          b.convictionScore - a.convictionScore
-      );
-
-      for (const signal of ordered) {
-        const held = heldByTicker.get(signal.ticker);
-        if (held) {
-          held.entryWeekIdx = w;
-          held.entryDate = weekDate;
-          held.yoyGrowthPct = signal.yoyGrowthPct;
-          held.correlation = signal.correlation;
-          held.convictionScore = signal.convictionScore;
-          if (held.brand !== signal.brand) {
-            held.brand = signal.brand;
-          }
-          continue;
-        }
-
-        const soldOn = lastSoldDate[signal.brand];
-        if (soldOn != null) {
-          const daysSinceSell = daysBetween(soldOn, weekDate);
-          if (daysSinceSell <= COOLDOWN_DAYS) continue;
-        }
-
-        const bars = stockBarsByTicker.get(signal.ticker);
-        if (!bars) continue;
-        const entryBar =
-          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
-        if (!entryBar || entryBar.close <= 0) continue;
-
-        let portfolioValue =
-          cash + markToMarket(open, stockBarsByTicker, weekDate);
-
-        if (isCashStarved(cash, portfolioValue) && open.length > 0) {
-          let weakestIdx = -1;
-          let weakestYoY = Number.POSITIVE_INFINITY;
-          for (let oi = 0; oi < open.length; oi++) {
-            const pos = open[oi];
-            if (pos.ticker === signal.ticker) continue;
-            const live = liveYoYForPosition(pos, brands, weekDate);
-            const yoy = live ?? pos.yoyGrowthPct;
-            if (yoy < weakestYoY) {
-              weakestYoY = yoy;
-              weakestIdx = oi;
-            }
-          }
-
-          if (
-            weakestIdx >= 0 &&
-            Number.isFinite(weakestYoY) &&
-            signal.yoyGrowthPct - weakestYoY >= OPPORTUNITY_YOY_GAP
-          ) {
-            const weakPos = open[weakestIdx];
-            const weakBars = stockBarsByTicker.get(weakPos.ticker);
-            const weakExit =
-              weakBars != null
-                ? nearestOnOrBefore(weakBars, weekDate) ??
-                  nearestOnOrAfter(weakBars, weekDate)
-                : null;
-            if (weakExit) {
-              const { trade, sellFee, netProceeds } = closePosition({
-                pos: weakPos,
-                exitBar: weakExit,
-                spxBars,
-                exitReason: "opportunity_replace",
-                replacedByBrand: signal.brand,
-              });
-              cash += netProceeds;
-              totalFeesPaid += sellFee;
-              closed.push(trade);
-              lastSoldDate[weakPos.brand] = weekDate;
-              open.splice(weakestIdx, 1);
-              heldByTicker.delete(weakPos.ticker);
-              if (!quiet) {
-                console.log(
-                  `  [REPLACE] Sold ${weakPos.brand} (YoY ${fmtPct(weakestYoY)}) → buy ${signal.brand} (YoY ${fmtPct(signal.yoyGrowthPct)})  (Replaced by stronger signal)`
-                );
-              }
-              portfolioValue =
-                cash + markToMarket(open, stockBarsByTicker, weekDate);
-            }
-          }
-        }
-
-        const allocation = sizeHybridAllocation(cash, portfolioValue);
-        if (allocation < 1) continue;
-
-        const buyFee = allocation * SLIPPAGE_RATE;
-        const totalDebit = allocation + buyFee;
-        if (totalDebit > cash + 1e-9) continue;
-
-        const shares = allocation / entryBar.close;
-        cash -= totalDebit;
-        totalFeesPaid += buyFee;
-        open.push({
-          ticker: signal.ticker,
-          brand: signal.brand,
-          parentName: signal.parentName,
-          originalEntryDate: entryBar.date,
-          entryDate: entryBar.date,
-          entryWeekIdx: w,
-          entryPrice: entryBar.close,
-          shares,
-          cost: allocation,
-          buyFee,
-          yoyGrowthPct: signal.yoyGrowthPct,
-          correlation: signal.correlation,
-          convictionScore: signal.convictionScore,
-        });
-        heldByTicker.set(signal.ticker, open[open.length - 1]);
-        buysExecuted += 1;
-        if (!quiet) {
-          console.log(
-            `  [BUY] ${signal.brand} (${signal.ticker})  size ${fmtUsd(allocation)}  (${((allocation / portfolioValue) * 100).toFixed(1)}% of portfolio)  YoY ${fmtPct(signal.yoyGrowthPct)}`
-          );
-        }
-      }
-    }
-
-    const endPortfolioValue =
-      cash + markToMarket(open, stockBarsByTicker, weekDate);
-    const endSpxBar =
-      nearestOnOrBefore(spxBars, weekDate) ??
-      nearestOnOrAfter(spxBars, weekDate);
-
-    if (
-      previousPortfolioValue != null &&
-      previousPortfolioValue > 0 &&
-      Number.isFinite(endPortfolioValue)
-    ) {
-      portfolioWeeklyReturns.push(
-        (endPortfolioValue - previousPortfolioValue) / previousPortfolioValue
-      );
-      previousPortfolioValue = endPortfolioValue;
-    }
-
-    if (
-      previousMarketValue != null &&
-      previousMarketValue > 0 &&
-      endSpxBar != null &&
-      Number.isFinite(endSpxBar.close) &&
-      endSpxBar.close > 0
-    ) {
-      marketWeeklyReturns.push(
-        (endSpxBar.close - previousMarketValue) / previousMarketValue
-      );
-      previousMarketValue = endSpxBar.close;
-    }
-  }
-
-  if (open.length > 0) {
-    const lastDate = timeline[timeline.length - 1];
-    for (const pos of open) {
-      const bars = stockBarsByTicker.get(pos.ticker);
-      const exitBar = bars
-        ? nearestOnOrBefore(bars, lastDate) ?? bars[bars.length - 1]
-        : null;
-      if (!exitBar) continue;
-      const { trade, sellFee, netProceeds } = closePosition({
-        pos,
-        exitBar,
-        spxBars,
-        exitReason: "forced_eod",
-      });
-      cash += netProceeds;
-      totalFeesPaid += sellFee;
-      closed.push(trade);
-      lastSoldDate[pos.brand] = lastDate;
-    }
-    open.length = 0;
-  }
-
-  const finalValue = cash;
-  const strategyReturn = pctReturn(STARTING_CAPITAL, finalValue);
-  const startDate = timeline[startIndex];
-  const endDate = timeline[timeline.length - 1];
-  const spxStart = nearestOnOrAfter(spxBars, startDate);
-  const spxEnd = nearestOnOrBefore(spxBars, endDate);
-  const benchmarkReturn =
-    spxStart && spxEnd ? pctReturn(spxStart.close, spxEnd.close) : NaN;
-  const portfolioAlpha =
-    Number.isFinite(strategyReturn) && Number.isFinite(benchmarkReturn)
-      ? strategyReturn - benchmarkReturn
-      : NaN;
-
-  const wins = closed.filter((t) => t.pnl > 0).length;
-  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
-  const beta = calculateBeta(portfolioWeeklyReturns, marketWeeklyReturns);
-  const sharpeAnn = calculateAnnualizedSharpe(portfolioWeeklyReturns);
-
-  return {
-    strategyReturn,
-    benchmarkReturn,
-    winRate,
-    beta,
-    sharpeAnn,
-    totalTrades: buysExecuted,
-    startDate,
-    endDate,
-    finalPortfolioValue: finalValue,
-    shiftWeeks,
-    closed,
-    totalInterestEarned,
-    totalFeesPaid,
-    portfolioAlpha,
-  };
-}
-
-function avgFinite(values: number[]): number | null {
-  const xs = values.filter((v) => Number.isFinite(v));
-  if (xs.length === 0) return null;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
-
-// ---------------------------------------------------------------------------
-// Batch runner: rolling-window path-dependency test
+// Main walk-forward loop
 // ---------------------------------------------------------------------------
 
 async function main() {
   console.log("\n╔══════════════════════════════════════════════════════════╗");
-  console.log("║  V5 Hybrid Simulator — Rolling Window Path Dependency    ║");
+  console.log("║     === TURBO FASHION INDEX: V6 EXPERIMENTAL ===         ║");
   console.log("╚══════════════════════════════════════════════════════════╝\n");
 
   const brandNames = [
@@ -1054,24 +658,29 @@ async function main() {
     `Universe: ${parentCompanies.length} parents · ${brandNames.length} child brands`
   );
   console.log(
-    `Capital: ${fmtUsd(STARTING_CAPITAL)} · Sizing: hybrid · max ${MAX_POSITION_PCT * 100}% / name`
+    `Capital: ${fmtUsd(STARTING_CAPITAL)} · Sizing: conviction (r × YoY) · max ${MAX_POSITION_PCT * 100}% / name`
   );
   console.log(
     `Entry: YoY > ${YOY_GROWTH_THRESHOLD}% · r > ${MIN_POSITIVE_CORR}`
   );
   console.log(
-    `Exit: early YoY < ${EARLY_EXIT_YOY_THRESHOLD}% · max ${HOLD_DAYS}d · opportunity gap ${OPPORTUNITY_YOY_GAP}pp`
+    `Exit: trim @ +${(TRIM_GAIN_MULTIPLE - 1) * 100}% · trail stop −${(1 - TRAILING_STOP_FRACTION) * 100}% from peak · else max ${HOLD_DAYS}d`
   );
   console.log(
-    `Cooldown: ${COOLDOWN_DAYS}d · T-Bill ${ANNUAL_RFR * 100}% · Slippage ${SLIPPAGE_RATE * 100}%/side\n`
+    `Cooldown: no re-buy of same brand for ${COOLDOWN_DAYS}d (~${COOLDOWN_WEEKS}w) after sell`
+  );
+  console.log(
+    `V6 tactics: pyramid scale-in (50% cash if ≥ ${fmtUsd(MIN_SCALE_IN_CASH)}) · partial trim · trailing stop`
+  );
+  console.log(
+    `Idle cash: ${ANNUAL_RFR * 100}% T-Bill · Friction: ${SLIPPAGE_RATE * 100}% per side\n`
+  );
+  console.log(
+    `Window: last ${SIM_YEARS}y of trading (first year reserved for YoY baseline)\n`
   );
 
   console.log("Fetching 5y Google Trends from Supabase…");
-  const trendData = await fetchTrendHistory(
-    brandNames,
-    YEARS_BACK,
-    "market_metrics"
-  );
+  const trendData = await fetchTrendHistory(brandNames, YEARS_BACK);
   if (trendData.length === 0) {
     throw new Error(
       "No trend rows — run npm run fetch:trends and ensure Supabase is configured."
@@ -1133,115 +742,522 @@ async function main() {
     throw new Error("No brand series available for simulation.");
   }
 
-  // Full YEARS_BACK timeline so startIndex = 52 + shift still leaves multi-year runs.
   const today = new Date().toISOString().slice(0, 10);
-  const dataStartDate = new Date();
-  dataStartDate.setFullYear(dataStartDate.getFullYear() - YEARS_BACK);
-  const dataStart = dataStartDate.toISOString().slice(0, 10);
+  const simStartDate = new Date();
+  simStartDate.setFullYear(simStartDate.getFullYear() - SIM_YEARS);
+  const simStart = simStartDate.toISOString().slice(0, 10);
 
   const allTrendDates = brands.flatMap((b) => b.series.map((p) => p.date));
-  const timeline = buildTimeline(spxBars, allTrendDates, dataStart).filter(
+  const timeline = buildTimeline(spxBars, allTrendDates, simStart).filter(
     (d) => d <= today
   );
 
-  if (timeline.length < YOY_LAG_WEEKS + HOLD_WEEKS + 30) {
+  if (timeline.length < HOLD_WEEKS + 2) {
     throw new Error(
       `Timeline too short (${timeline.length} weeks). Need more historical data.`
     );
   }
 
-  const historicalData: SimulationHistory = {
-    brands,
-    spxBars,
-    stockBarsByTicker,
-  };
-
-  /** Weekly start-date shifts for path-dependency stress test. */
-  const shifts = [0, 1, 2, 4, 8, 12, 26];
-  const results: SimulationResult[] = [];
-
   console.log(
-    `\nTimeline: ${timeline[0]} → ${timeline[timeline.length - 1]} (${timeline.length} weeks)`
+    `\nWalk-forward: ${timeline[0]} → ${timeline[timeline.length - 1]} (${timeline.length} weeks)\n`
   );
-  console.log(
-    `Rolling windows: startIndex = 52 + shift  for shifts [${shifts.join(", ")}]\n`
-  );
-  console.log("Running batch…\n");
 
-  for (const shift of shifts) {
-    const startIndex = 52 + shift;
-    process.stdout.write(
-      `  Shift +${String(shift).padStart(2, " ")}w (idx ${startIndex})… `
-    );
-    const result = await runSimulation(startIndex, timeline, historicalData, {
-      quiet: true,
-      shiftWeeks: shift,
-    });
-    results.push(result);
-    console.log(
-      `${result.startDate} → ${fmtPct(result.strategyReturn)}  (${result.totalTrades} trades)`
-    );
+  let cash = STARTING_CAPITAL;
+  const open: OpenPosition[] = [];
+  const closed: ClosedTrade[] = [];
+  let buysExecuted = 0;
+  let earlyExits = 0;
+  let stopLossExits = 0;
+  let partialTrims = 0;
+  let pyramidAdds = 0;
+  let totalInterestEarned = 0;
+  let totalFeesPaid = 0;
+  /** Child brand → last sell date (blocks re-entry for cooldown window). */
+  const lastSoldDate: Record<string, string> = {};
+
+  const portfolioWeeklyReturns: number[] = [];
+  const marketWeeklyReturns: number[] = [];
+  let previousPortfolioValue: number | null = null;
+  let previousMarketValue: number | null = null;
+
+  for (let w = 0; w < timeline.length; w++) {
+    const weekDate = timeline[w];
+    const isLastWeek = w === timeline.length - 1;
+
+    // ------------------------------------------------------------------
+    // START OF WEEK: seed previous values for WoW return tracking
+    // ------------------------------------------------------------------
+    const startPortfolioValue =
+      cash + markToMarket(open, stockBarsByTicker, weekDate);
+    const startSpxBar =
+      nearestOnOrBefore(spxBars, weekDate) ??
+      nearestOnOrAfter(spxBars, weekDate);
+    if (previousPortfolioValue == null && startPortfolioValue > 0) {
+      previousPortfolioValue = startPortfolioValue;
+    }
+    if (
+      previousMarketValue == null &&
+      startSpxBar != null &&
+      startSpxBar.close > 0
+    ) {
+      previousMarketValue = startSpxBar.close;
+    }
+
+    // ------------------------------------------------------------------
+    // IDLE CASH: accrue weekly T-Bill yield (ANNUAL_RFR / 52)
+    // ------------------------------------------------------------------
+    if (cash > 0) {
+      const interest = cash * WEEKLY_RFR;
+      cash += interest;
+      totalInterestEarned += interest;
+    }
+
+    // ------------------------------------------------------------------
+    // SELL EVAL: peak track → partial trim → trailing stop → max/early exit
+    // ------------------------------------------------------------------
+    for (let i = open.length - 1; i >= 0; i--) {
+      const pos = open[i];
+      const bars = stockBarsByTicker.get(pos.ticker);
+      if (!bars) continue;
+      const pxBar =
+        nearestOnOrBefore(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
+      if (!pxBar) continue;
+      const currentPrice = pxBar.close;
+
+      // Track peak for trailing stop.
+      if (currentPrice > pos.highestPriceReached) {
+        pos.highestPriceReached = currentPrice;
+      }
+
+      // --- Partial trim: +40% from blended entry, once ---
+      if (
+        !isLastWeek &&
+        !pos.hasTrimmed &&
+        currentPrice >= pos.entryPrice * TRIM_GAIN_MULTIPLE &&
+        pos.shares > 0
+      ) {
+        const sharesToSell = pos.shares * 0.5;
+        const costSlice = pos.cost * 0.5;
+        const buyFeeSlice = pos.buyFee * 0.5;
+        const { trade, sellFee, netProceeds } = closePosition({
+          pos,
+          exitBar: pxBar,
+          spxBars,
+          exitReason: "partial_trim",
+          sharesToSell,
+          costSlice,
+          buyFeeSlice,
+        });
+        cash += netProceeds;
+        totalFeesPaid += sellFee;
+        closed.push(trade);
+        pos.shares -= sharesToSell;
+        pos.cost -= costSlice;
+        pos.buyFee -= buyFeeSlice;
+        pos.hasTrimmed = true;
+        partialTrims += 1;
+      }
+
+      // --- Trailing stop: −15% from peak ---
+      if (
+        !isLastWeek &&
+        currentPrice < pos.highestPriceReached * TRAILING_STOP_FRACTION
+      ) {
+        const { trade, sellFee, netProceeds } = closePosition({
+          pos,
+          exitBar: pxBar,
+          spxBars,
+          exitReason: "stop_loss",
+        });
+        cash += netProceeds;
+        totalFeesPaid += sellFee;
+        closed.push(trade);
+        lastSoldDate[pos.brand] = weekDate;
+        stopLossExits += 1;
+        open.splice(i, 1);
+        continue;
+      }
+
+      // --- Classic exits: max hold / early YoY / force EOD ---
+      const weeksHeld = w - pos.entryWeekIdx;
+      const maxHoldReached =
+        weeksHeld >= HOLD_WEEKS ||
+        daysBetween(pos.entryDate, weekDate) >= HOLD_DAYS;
+
+      let earlyYoYCrash = false;
+      if (
+        !maxHoldReached &&
+        !isLastWeek &&
+        weeksHeld >= MIN_HOLD_WEEKS_BEFORE_EARLY_EXIT
+      ) {
+        const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
+        if (brandSeries) {
+          const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
+          if (idx != null) {
+            const liveYoY = yoyGrowthAt(brandSeries.series, idx);
+            if (liveYoY != null && liveYoY < EARLY_EXIT_YOY_THRESHOLD) {
+              earlyYoYCrash = true;
+            }
+          }
+        }
+      }
+
+      const shouldSell = isLastWeek || maxHoldReached || earlyYoYCrash;
+      if (!shouldSell) continue;
+
+      const exitReason: ExitReason =
+        isLastWeek && !maxHoldReached && !earlyYoYCrash
+          ? "forced_eod"
+          : earlyYoYCrash
+            ? "early_yoy"
+            : "max_hold";
+
+      const { trade, sellFee, netProceeds } = closePosition({
+        pos,
+        exitBar: pxBar,
+        spxBars,
+        exitReason,
+      });
+      cash += netProceeds;
+      totalFeesPaid += sellFee;
+      closed.push(trade);
+      lastSoldDate[pos.brand] = weekDate;
+      if (exitReason === "early_yoy") earlyExits += 1;
+      open.splice(i, 1);
+    }
+
+    if (!isLastWeek) {
+      // ------------------------------------------------------------------
+      // SCAN: V4 entry triggers as of this week (no look-ahead)
+      // ------------------------------------------------------------------
+      const rawTriggers: WeekTrigger[] = [];
+      for (const b of brands) {
+        const idx = seriesIndexOnOrBefore(b, weekDate);
+        if (idx == null) continue;
+
+        const yoy = yoyGrowthAt(b.series, idx);
+        if (yoy == null || yoy <= YOY_GROWTH_THRESHOLD) continue;
+
+        const stockBars = stockBarsByTicker.get(b.ticker)!;
+        const corr = correlationAsOf(b.series, stockBars, weekDate);
+        if (!Number.isFinite(corr) || corr <= MIN_POSITIVE_CORR) continue;
+
+        const score = convictionScore(yoy, corr);
+        rawTriggers.push({
+          brand: b.brand,
+          parentName: b.parentName,
+          ticker: b.ticker,
+          date: b.series[idx].date,
+          yoyGrowthPct: yoy,
+          correlation: Math.round(corr * 100) / 100,
+          convictionScore: Math.round(score * 10) / 10,
+        });
+      }
+
+      const byTicker = new Map<string, WeekTrigger>();
+      for (const t of rawTriggers) {
+        const prev = byTicker.get(t.ticker);
+        if (!prev || t.convictionScore > prev.convictionScore) {
+          byTicker.set(t.ticker, t);
+        }
+      }
+
+      const candidates = [...byTicker.values()].sort(
+        (a, b) => b.convictionScore - a.convictionScore
+      );
+
+      // ------------------------------------------------------------------
+      // BUY / PYRAMID (scale-in on re-trigger)
+      // ------------------------------------------------------------------
+      const heldByTicker = new Map(open.map((p) => [p.ticker, p]));
+      const buyable: { signal: WeekTrigger; entryBar: WeeklyBar }[] = [];
+
+      for (const signal of candidates) {
+        const held = heldByTicker.get(signal.ticker);
+        if (held) {
+          // Pyramid: scale in with 50% of idle cash when ≥ $1,000 available.
+          if (cash >= MIN_SCALE_IN_CASH) {
+            const bars = stockBarsByTicker.get(signal.ticker);
+            const entryBar = bars
+              ? nearestOnOrAfter(bars, weekDate) ??
+                nearestOnOrBefore(bars, weekDate)
+              : null;
+            if (entryBar && entryBar.close > 0) {
+              const allocation = cash * 0.5;
+              const buyFee = allocation * SLIPPAGE_RATE;
+              const totalDebit = allocation + buyFee;
+              if (totalDebit <= cash + 1e-9) {
+                const newShares = allocation / entryBar.close;
+                const oldShares = held.shares;
+                const totalShares = oldShares + newShares;
+                held.entryPrice =
+                  (oldShares * held.entryPrice + newShares * entryBar.close) /
+                  totalShares;
+                held.shares = totalShares;
+                held.cost += allocation;
+                held.buyFee += buyFee;
+                held.entryWeekIdx = w;
+                held.entryDate = weekDate;
+                held.yoyGrowthPct = signal.yoyGrowthPct;
+                held.correlation = signal.correlation;
+                held.convictionScore = signal.convictionScore;
+                if (entryBar.close > held.highestPriceReached) {
+                  held.highestPriceReached = entryBar.close;
+                }
+                if (held.brand !== signal.brand) held.brand = signal.brand;
+                cash -= totalDebit;
+                totalFeesPaid += buyFee;
+                pyramidAdds += 1;
+              }
+            }
+          }
+          continue;
+        }
+
+        const soldOn = lastSoldDate[signal.brand];
+        if (soldOn != null) {
+          const daysSinceSell = daysBetween(soldOn, weekDate);
+          if (daysSinceSell <= COOLDOWN_DAYS) continue;
+        }
+
+        const bars = stockBarsByTicker.get(signal.ticker);
+        if (!bars) continue;
+        const entryBar =
+          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
+        if (!entryBar || entryBar.close <= 0) continue;
+        buyable.push({ signal, entryBar });
+      }
+
+      if (buyable.length > 0 && cash > 0) {
+        const portfolioValue =
+          cash + markToMarket(open, stockBarsByTicker, weekDate);
+        const deployable = cash / (1 + SLIPPAGE_RATE);
+        const allocations = allocateByConviction(
+          buyable,
+          deployable,
+          portfolioValue
+        );
+
+        for (const { signal, entryBar, allocation } of allocations) {
+          const buyFee = allocation * SLIPPAGE_RATE;
+          const totalDebit = allocation + buyFee;
+          if (totalDebit > cash + 1e-9) continue;
+
+          const shares = allocation / entryBar.close;
+          cash -= totalDebit;
+          totalFeesPaid += buyFee;
+          open.push({
+            ticker: signal.ticker,
+            brand: signal.brand,
+            parentName: signal.parentName,
+            originalEntryDate: entryBar.date,
+            entryDate: entryBar.date,
+            entryWeekIdx: w,
+            entryPrice: entryBar.close,
+            shares,
+            cost: allocation,
+            buyFee,
+            yoyGrowthPct: signal.yoyGrowthPct,
+            correlation: signal.correlation,
+            convictionScore: signal.convictionScore,
+            highestPriceReached: entryBar.close,
+            hasTrimmed: false,
+          });
+          heldByTicker.set(signal.ticker, open[open.length - 1]);
+          buysExecuted += 1;
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // END OF WEEK: WoW % change → weekly return series (decimal)
+    // ------------------------------------------------------------------
+    const endPortfolioValue =
+      cash + markToMarket(open, stockBarsByTicker, weekDate);
+    const endSpxBar =
+      nearestOnOrBefore(spxBars, weekDate) ??
+      nearestOnOrAfter(spxBars, weekDate);
+
+    if (
+      previousPortfolioValue != null &&
+      previousPortfolioValue > 0 &&
+      Number.isFinite(endPortfolioValue)
+    ) {
+      portfolioWeeklyReturns.push(
+        (endPortfolioValue - previousPortfolioValue) / previousPortfolioValue
+      );
+      previousPortfolioValue = endPortfolioValue;
+    }
+
+    if (
+      previousMarketValue != null &&
+      previousMarketValue > 0 &&
+      endSpxBar != null &&
+      Number.isFinite(endSpxBar.close) &&
+      endSpxBar.close > 0
+    ) {
+      marketWeeklyReturns.push(
+        (endSpxBar.close - previousMarketValue) / previousMarketValue
+      );
+      previousMarketValue = endSpxBar.close;
+    }
   }
 
-  console.log("\n┌─────────────────────────────────────────────────────────────────────────────┐");
-  console.log("│  Rolling Window Results (Hybrid Capital Allocation)                         │");
-  console.log("├─────────────────────────────────────────────────────────────────────────────┤");
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const betaStr =
-      r.beta != null && Number.isFinite(r.beta) ? r.beta.toFixed(2) : "n/a";
-    const line = `Run ${i + 1} (Start: ${r.startDate}, +${r.shiftWeeks}w): ${fmtPct(r.strategyReturn)} Ret | ${fmtPct(r.benchmarkReturn)} SPX | ${r.winRate.toFixed(1)}% WR | ${betaStr} Beta | ${r.totalTrades} trades`;
-    console.log(`│  ${pad(line, 75)}│`);
+  // Safety: any leftover open positions
+  if (open.length > 0) {
+    const lastDate = timeline[timeline.length - 1];
+    for (const pos of open) {
+      const bars = stockBarsByTicker.get(pos.ticker);
+      const exitBar = bars
+        ? nearestOnOrBefore(bars, lastDate) ?? bars[bars.length - 1]
+        : null;
+      if (!exitBar) continue;
+      const { trade, sellFee, netProceeds } = closePosition({
+        pos,
+        exitBar,
+        spxBars,
+        exitReason: "forced_eod",
+      });
+      cash += netProceeds;
+      totalFeesPaid += sellFee;
+      closed.push(trade);
+      lastSoldDate[pos.brand] = lastDate;
+    }
+    open.length = 0;
   }
-  console.log("└─────────────────────────────────────────────────────────────────────────────┘\n");
 
-  const avgStrategy = avgFinite(results.map((r) => r.strategyReturn));
-  const avgBenchmark = avgFinite(results.map((r) => r.benchmarkReturn));
-  const avgWinRate = avgFinite(results.map((r) => r.winRate));
-  const avgBeta = avgFinite(
-    results.map((r) => r.beta).filter((b): b is number => b != null)
-  );
+  const finalValue = cash;
+  const strategyReturnPct = pctReturn(STARTING_CAPITAL, finalValue);
 
-  console.log("Averages across all rolling windows:");
-  console.log(
-    `  Average Strategy Return   ${avgStrategy != null ? fmtPct(avgStrategy) : "n/a"}`
-  );
-  console.log(
-    `  Average Benchmark Return  ${avgBenchmark != null ? fmtPct(avgBenchmark) : "n/a"}`
-  );
-  console.log(
-    `  Average Win Rate          ${avgWinRate != null ? `${avgWinRate.toFixed(1)}%` : "n/a"}`
-  );
-  console.log(
-    `  Average Beta              ${avgBeta != null ? avgBeta.toFixed(2) : "n/a"}`
-  );
-  console.log("");
+  const simEnd = timeline[timeline.length - 1];
+  const spxStart = nearestOnOrAfter(spxBars, timeline[0]);
+  const spxEnd = nearestOnOrBefore(spxBars, simEnd);
+  const spxReturnPct =
+    spxStart && spxEnd ? pctReturn(spxStart.close, spxEnd.close) : NaN;
+  const portfolioAlphaPct =
+    Number.isFinite(strategyReturnPct) && Number.isFinite(spxReturnPct)
+      ? strategyReturnPct - spxReturnPct
+      : NaN;
 
-  // Export CSV for the baseline window (shift 0) for trade-level fact-checking.
-  const baseline = results[0];
-  if (baseline) {
-    const tradeLogPath = path.join(process.cwd(), "simulator_trades.csv");
-    exportUltimateReportCsv(
-      baseline.closed,
-      {
-        startingCapital: STARTING_CAPITAL,
-        finalPortfolioValue: baseline.finalPortfolioValue,
-        strategyReturnPct: baseline.strategyReturn,
-        spxReturnPct: baseline.benchmarkReturn,
-        alphaPct: baseline.portfolioAlpha,
-        portfolioBeta: baseline.beta,
-        sharpeAnn: baseline.sharpeAnn,
-        totalTrades: baseline.totalTrades,
-        winRatePct: baseline.winRate,
-        totalInterestEarned: baseline.totalInterestEarned,
-        totalFeesPaid: baseline.totalFeesPaid,
-      },
-      tradeLogPath
-    );
-    console.log(
-      "📊 Baseline (shift +0w) trade log exported to simulator_trades.csv"
-    );
+  const wins = closed.filter((t) => t.pnl > 0).length;
+  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+
+  const alphas = closed
+    .map((t) => t.alphaPct)
+    .filter((a) => Number.isFinite(a));
+  const avgTradeAlpha =
+    alphas.length > 0
+      ? alphas.reduce((s, a) => s + a, 0) / alphas.length
+      : NaN;
+
+  const portfolioBeta = calculateBeta(
+    portfolioWeeklyReturns,
+    marketWeeklyReturns
+  );
+  const sharpeAnn = calculateAnnualizedSharpe(portfolioWeeklyReturns);
+
+  console.log("┌──────────────────────────────────────────────────────────┐");
+  console.log("│     === TURBO FASHION INDEX: V6 EXPERIMENTAL ===         │");
+  console.log("├──────────────────────────────────────────────────────────┤");
+  console.log(
+    `│  Starting Capital            ${pad(fmtUsd(STARTING_CAPITAL), 26)}│`
+  );
+  console.log(
+    `│  Final Portfolio Value       ${pad(fmtUsd(finalValue), 26)}│`
+  );
+  console.log(
+    `│  V6 Strategy Return          ${pad(fmtPct(strategyReturnPct), 26)}│`
+  );
+  console.log(
+    `│  S&P 500 Total Return        ${pad(fmtPct(spxReturnPct), 26)}│`
+  );
+  console.log(
+    `│  Total Trades Executed       ${pad(String(buysExecuted), 26)}│`
+  );
+  console.log(
+    `│  Portfolio Win Rate          ${pad(`${winRate.toFixed(1)}%  (${wins}/${closed.length})`, 26)}│`
+  );
+  console.log(
+    `│  Average Trade Alpha         ${pad(fmtPct(avgTradeAlpha), 26)}│`
+  );
+  console.log(
+    `│  Portfolio Beta              ${pad(fmtRatio(portfolioBeta, 2), 26)}│`
+  );
+  console.log(
+    `│  Sharpe Ratio (Ann.)         ${pad(fmtRatio(sharpeAnn, 2), 26)}│`
+  );
+  console.log(
+    `│  T-Bill Interest Earned      ${pad(fmtUsd(totalInterestEarned), 26)}│`
+  );
+  console.log(
+    `│  Trading Friction (Fees)     ${pad(fmtUsd(totalFeesPaid), 26)}│`
+  );
+  console.log("├──────────────────────────────────────────────────────────┤");
+  console.log(
+    `│  Period                      ${pad(`${timeline[0]} → ${simEnd}`, 26)}│`
+  );
+  console.log(
+    `│  Early YoY Exits             ${pad(String(earlyExits), 26)}│`
+  );
+  console.log(
+    `│  Stop-Loss Exits             ${pad(String(stopLossExits), 26)}│`
+  );
+  console.log(
+    `│  Partial Trims               ${pad(String(partialTrims), 26)}│`
+  );
+  console.log(
+    `│  Pyramid Scale-Ins           ${pad(String(pyramidAdds), 26)}│`
+  );
+  console.log(
+    `│  vs Benchmark (portfolio α)  ${pad(
+      Number.isFinite(portfolioAlphaPct) ? fmtPct(portfolioAlphaPct) : "n/a",
+      26
+    )}│`
+  );
+  console.log("└──────────────────────────────────────────────────────────┘\n");
+
+  const sample = [...closed]
+    .sort((a, b) => b.exitDate.localeCompare(a.exitDate))
+    .slice(0, 8);
+  if (sample.length > 0) {
+    console.log("Recent closed trades:");
+    for (const t of sample) {
+      const tag =
+        t.exitReason === "early_yoy"
+          ? " (early YoY)"
+          : t.exitReason === "forced_eod"
+            ? " (forced)"
+            : t.exitReason === "stop_loss"
+              ? " (Stop-Loss)"
+              : t.exitReason === "partial_trim"
+                ? " (Trim)"
+                : "";
+      console.log(
+        `  ${t.entryDate}→${t.exitDate}  ${t.ticker.padEnd(6)} ${pad(t.brand, 16)} ${fmtPct(t.returnPct)}  α ${fmtPct(t.alphaPct)}  PnL ${fmtUsd(t.pnl)}${tag}`
+      );
+    }
+    console.log("");
   }
+
+  const tradeLogPath = path.join(process.cwd(), "simulator_v6_trades.csv");
+  exportUltimateReportCsv(
+    closed,
+    {
+      startingCapital: STARTING_CAPITAL,
+      finalPortfolioValue: finalValue,
+      strategyReturnPct,
+      spxReturnPct,
+      alphaPct: portfolioAlphaPct,
+      portfolioBeta,
+      sharpeAnn,
+      totalTrades: buysExecuted,
+      winRatePct: winRate,
+      totalInterestEarned,
+      totalFeesPaid,
+    },
+    tradeLogPath
+  );
+  console.log("📊 Full trade log exported to simulator_v6_trades.csv");
 }
 
 main()

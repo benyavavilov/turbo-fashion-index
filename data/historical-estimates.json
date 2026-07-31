@@ -1,0 +1,866 @@
+{
+  "ANF": [
+    {
+      "date": "2026-05-27",
+      "estimatedRevenueGrowth": 2.18,
+      "actualRevenueGrowth": 1.28
+    },
+    {
+      "date": "2026-02-28",
+      "estimatedRevenueGrowth": 15.17,
+      "actualRevenueGrowth": 17.24
+    },
+    {
+      "date": "2025-11-21",
+      "estimatedRevenueGrowth": 20.75,
+      "actualRevenueGrowth": 21.7
+    },
+    {
+      "date": "2025-08-26",
+      "estimatedRevenueGrowth": 27.66,
+      "actualRevenueGrowth": 28.72
+    },
+    {
+      "date": "2025-05-27",
+      "estimatedRevenueGrowth": 13.1,
+      "actualRevenueGrowth": 21.43
+    },
+    {
+      "date": "2025-02-28",
+      "estimatedRevenueGrowth": 19.17,
+      "actualRevenueGrowth": 20.83
+    },
+    {
+      "date": "2024-11-21",
+      "estimatedRevenueGrowth": 11.36,
+      "actualRevenueGrowth": 20.45
+    },
+    {
+      "date": "2024-08-26",
+      "estimatedRevenueGrowth": 3.7,
+      "actualRevenueGrowth": 16.05
+    },
+    {
+      "date": "2024-05-27",
+      "estimatedRevenueGrowth": 0,
+      "actualRevenueGrowth": 3.7
+    },
+    {
+      "date": "2024-02-28",
+      "estimatedRevenueGrowth": 1.72,
+      "actualRevenueGrowth": 3.45
+    },
+    {
+      "date": "2023-11-21",
+      "estimatedRevenueGrowth": -5.68,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-08-26",
+      "estimatedRevenueGrowth": -2.33,
+      "actualRevenueGrowth": -5.81
+    },
+    {
+      "date": "2023-05-27",
+      "estimatedRevenueGrowth": 2.56,
+      "actualRevenueGrowth": 3.85
+    },
+    {
+      "date": "2023-02-28",
+      "estimatedRevenueGrowth": 1.72,
+      "actualRevenueGrowth": 0
+    }
+  ],
+  "DECK": [
+    {
+      "date": "2026-05-20",
+      "estimatedRevenueGrowth": 6.08,
+      "actualRevenueGrowth": 9.71
+    },
+    {
+      "date": "2026-02-05",
+      "estimatedRevenueGrowth": 4.92,
+      "actualRevenueGrowth": 6.99
+    },
+    {
+      "date": "2025-10-25",
+      "estimatedRevenueGrowth": 11.93,
+      "actualRevenueGrowth": 20.18
+    },
+    {
+      "date": "2025-07-25",
+      "estimatedRevenueGrowth": 14.05,
+      "actualRevenueGrowth": 22.04
+    },
+    {
+      "date": "2025-05-20",
+      "estimatedRevenueGrowth": 13.58,
+      "actualRevenueGrowth": 19.44
+    },
+    {
+      "date": "2025-02-05",
+      "estimatedRevenueGrowth": 14.38,
+      "actualRevenueGrowth": 19.61
+    },
+    {
+      "date": "2024-10-25",
+      "estimatedRevenueGrowth": 19.86,
+      "actualRevenueGrowth": 24.43
+    },
+    {
+      "date": "2024-07-25",
+      "estimatedRevenueGrowth": 7.49,
+      "actualRevenueGrowth": 10.1
+    },
+    {
+      "date": "2024-05-20",
+      "estimatedRevenueGrowth": 3.67,
+      "actualRevenueGrowth": 7.96
+    },
+    {
+      "date": "2024-02-05",
+      "estimatedRevenueGrowth": 5.5,
+      "actualRevenueGrowth": 13.67
+    },
+    {
+      "date": "2023-10-25",
+      "estimatedRevenueGrowth": -4,
+      "actualRevenueGrowth": 0.11
+    },
+    {
+      "date": "2023-07-25",
+      "estimatedRevenueGrowth": 17.06,
+      "actualRevenueGrowth": 21.83
+    },
+    {
+      "date": "2023-05-20",
+      "estimatedRevenueGrowth": 3.39,
+      "actualRevenueGrowth": 7.47
+    },
+    {
+      "date": "2023-02-05",
+      "estimatedRevenueGrowth": 7.74,
+      "actualRevenueGrowth": 13.3
+    }
+  ],
+  "URBN": [
+    {
+      "date": "2026-05-20",
+      "estimatedRevenueGrowth": 9.47,
+      "actualRevenueGrowth": 11.35
+    },
+    {
+      "date": "2026-02-28",
+      "estimatedRevenueGrowth": 10.31,
+      "actualRevenueGrowth": 11.23
+    },
+    {
+      "date": "2025-11-20",
+      "estimatedRevenueGrowth": 2.34,
+      "actualRevenueGrowth": 5.47
+    },
+    {
+      "date": "2025-08-20",
+      "estimatedRevenueGrowth": 5.04,
+      "actualRevenueGrowth": 7.56
+    },
+    {
+      "date": "2025-05-20",
+      "estimatedRevenueGrowth": 11.71,
+      "actualRevenueGrowth": 19.82
+    },
+    {
+      "date": "2025-02-28",
+      "estimatedRevenueGrowth": 9.42,
+      "actualRevenueGrowth": 17.39
+    },
+    {
+      "date": "2024-11-20",
+      "estimatedRevenueGrowth": 2.54,
+      "actualRevenueGrowth": 8.47
+    },
+    {
+      "date": "2024-08-20",
+      "estimatedRevenueGrowth": -2.54,
+      "actualRevenueGrowth": 0.85
+    },
+    {
+      "date": "2024-05-20",
+      "estimatedRevenueGrowth": 3.92,
+      "actualRevenueGrowth": 8.82
+    },
+    {
+      "date": "2024-02-28",
+      "estimatedRevenueGrowth": 1.5,
+      "actualRevenueGrowth": 3.76
+    },
+    {
+      "date": "2023-11-20",
+      "estimatedRevenueGrowth": 1.77,
+      "actualRevenueGrowth": 4.42
+    },
+    {
+      "date": "2023-08-20",
+      "estimatedRevenueGrowth": -2.59,
+      "actualRevenueGrowth": 1.72
+    },
+    {
+      "date": "2023-05-20",
+      "estimatedRevenueGrowth": 1.87,
+      "actualRevenueGrowth": 6.03
+    },
+    {
+      "date": "2023-02-28",
+      "estimatedRevenueGrowth": -0.15,
+      "actualRevenueGrowth": -0.15
+    }
+  ],
+  "GAP": [
+    {
+      "date": "2026-05-25",
+      "estimatedRevenueGrowth": 1.16,
+      "actualRevenueGrowth": 1.07
+    },
+    {
+      "date": "2026-02-28",
+      "estimatedRevenueGrowth": -4.75,
+      "actualRevenueGrowth": -4.16
+    },
+    {
+      "date": "2025-11-25",
+      "estimatedRevenueGrowth": 0.8,
+      "actualRevenueGrowth": 0.27
+    },
+    {
+      "date": "2025-08-25",
+      "estimatedRevenueGrowth": 6.48,
+      "actualRevenueGrowth": 5.07
+    },
+    {
+      "date": "2025-05-25",
+      "estimatedRevenueGrowth": 5.5,
+      "actualRevenueGrowth": 5.49
+    },
+    {
+      "date": "2025-02-28",
+      "estimatedRevenueGrowth": 4.33,
+      "actualRevenueGrowth": 4.25
+    },
+    {
+      "date": "2024-11-25",
+      "estimatedRevenueGrowth": -6.68,
+      "actualRevenueGrowth": -8.5
+    },
+    {
+      "date": "2024-08-25",
+      "estimatedRevenueGrowth": -6.22,
+      "actualRevenueGrowth": -8.03
+    },
+    {
+      "date": "2024-05-25",
+      "estimatedRevenueGrowth": -2.99,
+      "actualRevenueGrowth": -2.09
+    },
+    {
+      "date": "2024-02-28",
+      "estimatedRevenueGrowth": -8.39,
+      "actualRevenueGrowth": -6.4
+    },
+    {
+      "date": "2023-11-25",
+      "estimatedRevenueGrowth": 2.79,
+      "actualRevenueGrowth": 4.57
+    },
+    {
+      "date": "2023-08-25",
+      "estimatedRevenueGrowth": -1.79,
+      "actualRevenueGrowth": -0.77
+    },
+    {
+      "date": "2023-05-25",
+      "estimatedRevenueGrowth": -3.13,
+      "actualRevenueGrowth": -2.9
+    },
+    {
+      "date": "2023-02-28",
+      "estimatedRevenueGrowth": 0.68,
+      "actualRevenueGrowth": 0.67
+    }
+  ],
+  "ONON": [
+    {
+      "date": "2026-05-15",
+      "estimatedRevenueGrowth": 28.11,
+      "actualRevenueGrowth": 29.74
+    },
+    {
+      "date": "2026-03-15",
+      "estimatedRevenueGrowth": 25.52,
+      "actualRevenueGrowth": 27.75
+    },
+    {
+      "date": "2025-11-15",
+      "estimatedRevenueGrowth": 17.84,
+      "actualRevenueGrowth": 22.94
+    },
+    {
+      "date": "2025-08-15",
+      "estimatedRevenueGrowth": 18.74,
+      "actualRevenueGrowth": 24.72
+    },
+    {
+      "date": "2025-05-15",
+      "estimatedRevenueGrowth": 27.63,
+      "actualRevenueGrowth": 36.94
+    },
+    {
+      "date": "2025-03-15",
+      "estimatedRevenueGrowth": 40.71,
+      "actualRevenueGrowth": 50.09
+    },
+    {
+      "date": "2024-11-15",
+      "estimatedRevenueGrowth": 43.6,
+      "actualRevenueGrowth": 49.71
+    },
+    {
+      "date": "2024-08-15",
+      "estimatedRevenueGrowth": 31.53,
+      "actualRevenueGrowth": 37.3
+    },
+    {
+      "date": "2024-05-15",
+      "estimatedRevenueGrowth": 33.64,
+      "actualRevenueGrowth": 41.28
+    },
+    {
+      "date": "2024-03-15",
+      "estimatedRevenueGrowth": 41.88,
+      "actualRevenueGrowth": 51.25
+    },
+    {
+      "date": "2023-11-15",
+      "estimatedRevenueGrowth": 42.16,
+      "actualRevenueGrowth": 41.19
+    },
+    {
+      "date": "2023-08-15",
+      "estimatedRevenueGrowth": 44.77,
+      "actualRevenueGrowth": 54.51
+    },
+    {
+      "date": "2023-05-15",
+      "estimatedRevenueGrowth": 33.84,
+      "actualRevenueGrowth": 50.22
+    },
+    {
+      "date": "2023-03-15",
+      "estimatedRevenueGrowth": 27.02,
+      "actualRevenueGrowth": 35.64
+    }
+  ],
+  "AEO": [
+    {
+      "date": "2026-05-25",
+      "estimatedRevenueGrowth": 8.26,
+      "actualRevenueGrowth": 10.09
+    },
+    {
+      "date": "2026-03-05",
+      "estimatedRevenueGrowth": 1.22,
+      "actualRevenueGrowth": 2.44
+    },
+    {
+      "date": "2025-11-25",
+      "estimatedRevenueGrowth": 0,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2025-08-25",
+      "estimatedRevenueGrowth": 0.83,
+      "actualRevenueGrowth": 2.5
+    },
+    {
+      "date": "2025-05-25",
+      "estimatedRevenueGrowth": -2.78,
+      "actualRevenueGrowth": 0.93
+    },
+    {
+      "date": "2025-03-05",
+      "estimatedRevenueGrowth": 8,
+      "actualRevenueGrowth": 9.33
+    },
+    {
+      "date": "2024-11-25",
+      "estimatedRevenueGrowth": -0.81,
+      "actualRevenueGrowth": 4.84
+    },
+    {
+      "date": "2024-08-25",
+      "estimatedRevenueGrowth": -0.83,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2024-05-25",
+      "estimatedRevenueGrowth": -3.32,
+      "actualRevenueGrowth": 2.86
+    },
+    {
+      "date": "2024-03-05",
+      "estimatedRevenueGrowth": -1.99,
+      "actualRevenueGrowth": -0.66
+    },
+    {
+      "date": "2023-11-25",
+      "estimatedRevenueGrowth": -2.42,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-08-25",
+      "estimatedRevenueGrowth": -1.68,
+      "actualRevenueGrowth": 0.84
+    },
+    {
+      "date": "2023-05-25",
+      "estimatedRevenueGrowth": -4.26,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-03-05",
+      "estimatedRevenueGrowth": -1.32,
+      "actualRevenueGrowth": 0
+    }
+  ],
+  "TPR": [
+    {
+      "date": "2026-05-10",
+      "estimatedRevenueGrowth": -6.96,
+      "actualRevenueGrowth": -4.43
+    },
+    {
+      "date": "2026-02-10",
+      "estimatedRevenueGrowth": 1.48,
+      "actualRevenueGrowth": 2.46
+    },
+    {
+      "date": "2025-11-10",
+      "estimatedRevenueGrowth": -1.32,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2025-08-10",
+      "estimatedRevenueGrowth": 1.23,
+      "actualRevenueGrowth": -1.85
+    },
+    {
+      "date": "2025-05-10",
+      "estimatedRevenueGrowth": -0.66,
+      "actualRevenueGrowth": 4.64
+    },
+    {
+      "date": "2025-02-10",
+      "estimatedRevenueGrowth": -0.99,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2024-11-10",
+      "estimatedRevenueGrowth": 5.71,
+      "actualRevenueGrowth": 7.86
+    },
+    {
+      "date": "2024-08-10",
+      "estimatedRevenueGrowth": 1.85,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2024-05-10",
+      "estimatedRevenueGrowth": 0.69,
+      "actualRevenueGrowth": 4.86
+    },
+    {
+      "date": "2024-02-10",
+      "estimatedRevenueGrowth": -1.48,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-11-10",
+      "estimatedRevenueGrowth": -6.25,
+      "actualRevenueGrowth": -2.78
+    },
+    {
+      "date": "2023-08-10",
+      "estimatedRevenueGrowth": -1.23,
+      "actualRevenueGrowth": -1.22
+    },
+    {
+      "date": "2023-05-10",
+      "estimatedRevenueGrowth": 0,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-02-10",
+      "estimatedRevenueGrowth": -6.07,
+      "actualRevenueGrowth": -5.14
+    }
+  ],
+  "ELF": [
+    {
+      "date": "2026-05-20",
+      "estimatedRevenueGrowth": 23.47,
+      "actualRevenueGrowth": 23.78
+    },
+    {
+      "date": "2026-02-05",
+      "estimatedRevenueGrowth": 20.12,
+      "actualRevenueGrowth": 36.61
+    },
+    {
+      "date": "2025-11-05",
+      "estimatedRevenueGrowth": 24.87,
+      "actualRevenueGrowth": 27.84
+    },
+    {
+      "date": "2025-08-05",
+      "estimatedRevenueGrowth": 11.19,
+      "actualRevenueGrowth": 14.44
+    },
+    {
+      "date": "2025-05-20",
+      "estimatedRevenueGrowth": 35.61,
+      "actualRevenueGrowth": 42.16
+    },
+    {
+      "date": "2025-02-05",
+      "estimatedRevenueGrowth": 43.52,
+      "actualRevenueGrowth": 53.84
+    },
+    {
+      "date": "2024-11-05",
+      "estimatedRevenueGrowth": 67.62,
+      "actualRevenueGrowth": 76.21
+    },
+    {
+      "date": "2024-08-05",
+      "estimatedRevenueGrowth": 105.85,
+      "actualRevenueGrowth": 134.13
+    },
+    {
+      "date": "2024-05-20",
+      "estimatedRevenueGrowth": 93.62,
+      "actualRevenueGrowth": 109.91
+    },
+    {
+      "date": "2024-02-05",
+      "estimatedRevenueGrowth": 11.21,
+      "actualRevenueGrowth": 19.46
+    },
+    {
+      "date": "2023-11-05",
+      "estimatedRevenueGrowth": 50.68,
+      "actualRevenueGrowth": 67.53
+    },
+    {
+      "date": "2023-08-05",
+      "estimatedRevenueGrowth": 73.12,
+      "actualRevenueGrowth": 87.98
+    },
+    {
+      "date": "2023-05-20",
+      "estimatedRevenueGrowth": 42.86,
+      "actualRevenueGrowth": 56.79
+    },
+    {
+      "date": "2023-02-05",
+      "estimatedRevenueGrowth": 34.05,
+      "actualRevenueGrowth": 44.64
+    }
+  ],
+  "GOOS": [
+    {
+      "date": "2026-05-15",
+      "estimatedRevenueGrowth": 2.73,
+      "actualRevenueGrowth": 4.95
+    },
+    {
+      "date": "2026-02-05",
+      "estimatedRevenueGrowth": 0.16,
+      "actualRevenueGrowth": 0.03
+    },
+    {
+      "date": "2025-11-05",
+      "estimatedRevenueGrowth": -3.81,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2025-08-05",
+      "estimatedRevenueGrowth": 4,
+      "actualRevenueGrowth": 10.13
+    },
+    {
+      "date": "2025-05-15",
+      "estimatedRevenueGrowth": -22.44,
+      "actualRevenueGrowth": -20.99
+    },
+    {
+      "date": "2025-02-05",
+      "estimatedRevenueGrowth": 5.31,
+      "actualRevenueGrowth": 5.49
+    },
+    {
+      "date": "2024-11-05",
+      "estimatedRevenueGrowth": 19.1,
+      "actualRevenueGrowth": 21.74
+    },
+    {
+      "date": "2024-08-05",
+      "estimatedRevenueGrowth": 7.29,
+      "actualRevenueGrowth": 14.45
+    },
+    {
+      "date": "2024-05-15",
+      "estimatedRevenueGrowth": -14.63,
+      "actualRevenueGrowth": -9.63
+    },
+    {
+      "date": "2024-02-05",
+      "estimatedRevenueGrowth": 11.89,
+      "actualRevenueGrowth": 12.48
+    },
+    {
+      "date": "2023-11-05",
+      "estimatedRevenueGrowth": 13.63,
+      "actualRevenueGrowth": 16.62
+    },
+    {
+      "date": "2023-08-05",
+      "estimatedRevenueGrowth": 27.2,
+      "actualRevenueGrowth": 36.79
+    },
+    {
+      "date": "2023-05-15",
+      "estimatedRevenueGrowth": 1.31,
+      "actualRevenueGrowth": 7.97
+    },
+    {
+      "date": "2023-02-05",
+      "estimatedRevenueGrowth": 1.34,
+      "actualRevenueGrowth": 1.34
+    }
+  ],
+  "LEVI": [
+    {
+      "date": "2026-07-08",
+      "estimatedRevenueGrowth": 5.55,
+      "actualRevenueGrowth": 8.33
+    },
+    {
+      "date": "2026-04-04",
+      "estimatedRevenueGrowth": 13.07,
+      "actualRevenueGrowth": 13.73
+    },
+    {
+      "date": "2026-01-25",
+      "estimatedRevenueGrowth": 4.12,
+      "actualRevenueGrowth": 5.99
+    },
+    {
+      "date": "2025-10-12",
+      "estimatedRevenueGrowth": 1.33,
+      "actualRevenueGrowth": 2.67
+    },
+    {
+      "date": "2025-07-10",
+      "estimatedRevenueGrowth": 6.77,
+      "actualRevenueGrowth": 9.02
+    },
+    {
+      "date": "2025-04-05",
+      "estimatedRevenueGrowth": -9.36,
+      "actualRevenueGrowth": -10.53
+    },
+    {
+      "date": "2025-01-25",
+      "estimatedRevenueGrowth": 5.1,
+      "actualRevenueGrowth": 5.03
+    },
+    {
+      "date": "2024-10-10",
+      "estimatedRevenueGrowth": -1.32,
+      "actualRevenueGrowth": -0.66
+    },
+    {
+      "date": "2024-07-10",
+      "estimatedRevenueGrowth": -1.49,
+      "actualRevenueGrowth": -0.75
+    },
+    {
+      "date": "2024-04-05",
+      "estimatedRevenueGrowth": -1.18,
+      "actualRevenueGrowth": 0.59
+    },
+    {
+      "date": "2024-01-25",
+      "estimatedRevenueGrowth": -1.26,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-10-10",
+      "estimatedRevenueGrowth": -1.32,
+      "actualRevenueGrowth": -0.66
+    },
+    {
+      "date": "2023-07-10",
+      "estimatedRevenueGrowth": 0.75,
+      "actualRevenueGrowth": 0
+    },
+    {
+      "date": "2023-04-05",
+      "estimatedRevenueGrowth": 3.14,
+      "actualRevenueGrowth": 6.92
+    }
+  ],
+  "CROX": [
+    {
+      "date": "2026-08-05",
+      "estimatedRevenueGrowth": 0.87,
+      "actualRevenueGrowth": 3.51
+    },
+    {
+      "date": "2026-05-05",
+      "estimatedRevenueGrowth": -3.93,
+      "actualRevenueGrowth": -1.7
+    },
+    {
+      "date": "2026-02-15",
+      "estimatedRevenueGrowth": -1.86,
+      "actualRevenueGrowth": -0.26
+    },
+    {
+      "date": "2025-11-05",
+      "estimatedRevenueGrowth": -3.81,
+      "actualRevenueGrowth": -5.11
+    },
+    {
+      "date": "2025-08-05",
+      "estimatedRevenueGrowth": 4.67,
+      "actualRevenueGrowth": 6.54
+    },
+    {
+      "date": "2025-05-05",
+      "estimatedRevenueGrowth": 3.51,
+      "actualRevenueGrowth": 6.01
+    },
+    {
+      "date": "2025-02-15",
+      "estimatedRevenueGrowth": 0.53,
+      "actualRevenueGrowth": 1.58
+    },
+    {
+      "date": "2024-11-05",
+      "estimatedRevenueGrowth": 4.57,
+      "actualRevenueGrowth": 6.59
+    },
+    {
+      "date": "2024-08-05",
+      "estimatedRevenueGrowth": 7.22,
+      "actualRevenueGrowth": 10.93
+    },
+    {
+      "date": "2024-05-05",
+      "estimatedRevenueGrowth": 23.08,
+      "actualRevenueGrowth": 27.94
+    },
+    {
+      "date": "2024-02-15",
+      "estimatedRevenueGrowth": 10.15,
+      "actualRevenueGrowth": 11.38
+    },
+    {
+      "date": "2023-11-05",
+      "estimatedRevenueGrowth": 36.65,
+      "actualRevenueGrowth": 40.27
+    },
+    {
+      "date": "2023-08-05",
+      "estimatedRevenueGrowth": 56.44,
+      "actualRevenueGrowth": 60.47
+    },
+    {
+      "date": "2023-05-05",
+      "estimatedRevenueGrowth": 41.11,
+      "actualRevenueGrowth": 47.77
+    }
+  ],
+  "BOOT": [
+    {
+      "date": "2026-08-05",
+      "estimatedRevenueGrowth": 15.76,
+      "actualRevenueGrowth": 17.83
+    },
+    {
+      "date": "2026-05-14",
+      "estimatedRevenueGrowth": 17.36,
+      "actualRevenueGrowth": 18.73
+    },
+    {
+      "date": "2026-01-30",
+      "estimatedRevenueGrowth": 15.53,
+      "actualRevenueGrowth": 17.32
+    },
+    {
+      "date": "2025-10-30",
+      "estimatedRevenueGrowth": 17.19,
+      "actualRevenueGrowth": 19.24
+    },
+    {
+      "date": "2025-08-05",
+      "estimatedRevenueGrowth": 31.02,
+      "actualRevenueGrowth": 34.72
+    },
+    {
+      "date": "2025-05-15",
+      "estimatedRevenueGrowth": 5.31,
+      "actualRevenueGrowth": 5.32
+    },
+    {
+      "date": "2025-01-30",
+      "estimatedRevenueGrowth": 6.28,
+      "actualRevenueGrowth": 7.74
+    },
+    {
+      "date": "2024-10-30",
+      "estimatedRevenueGrowth": 11.83,
+      "actualRevenueGrowth": 12.11
+    },
+    {
+      "date": "2024-08-05",
+      "estimatedRevenueGrowth": 4.32,
+      "actualRevenueGrowth": 4.32
+    },
+    {
+      "date": "2024-05-15",
+      "estimatedRevenueGrowth": 8.56,
+      "actualRevenueGrowth": 11.4
+    },
+    {
+      "date": "2024-01-30",
+      "estimatedRevenueGrowth": -3.12,
+      "actualRevenueGrowth": -2.53
+    },
+    {
+      "date": "2023-10-30",
+      "estimatedRevenueGrowth": 2.05,
+      "actualRevenueGrowth": 4.25
+    },
+    {
+      "date": "2023-08-05",
+      "estimatedRevenueGrowth": -3.14,
+      "actualRevenueGrowth": -1.38
+    },
+    {
+      "date": "2023-05-15",
+      "estimatedRevenueGrowth": 10.14,
+      "actualRevenueGrowth": 12.09
+    }
+  ]
+}

@@ -91,11 +91,12 @@ export async function getTrendData(
 
     // PostgREST max_rows is typically 1000 — page past that ceiling.
     const PAGE_SIZE = 1000;
-    const MAX_ROWS = 10000;
+    const MAX_ROWS = 25000;
     const allRows: MetricJoinRow[] = [];
 
     for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
       const to = Math.min(from + PAGE_SIZE - 1, MAX_ROWS - 1);
+      // Production market_metrics with FK join to tracked_entities.
       const { data: page, error } = await supabase
         .from("market_metrics")
         .select(
@@ -104,7 +105,7 @@ export async function getTrendData(
         .in("entity_id", entityIds)
         .order("recorded_date", { ascending: true })
         .range(from, to)
-        .limit(10000);
+        .limit(25000);
 
       if (error) throw error;
       if (!page?.length) break;

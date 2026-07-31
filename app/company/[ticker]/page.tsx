@@ -16,6 +16,31 @@ import { createBrowserSupabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
+/** Ultimate Handbook columns from ai_insights. */
+const ASSET_PROFILE_SELECT = [
+  "ticker",
+  "parent_name",
+  "brand",
+  "earnings_mismatch",
+  "direction",
+  "momentum_pct",
+  "correlation",
+  "hero_text",
+  "bullet_points",
+  "sentiment",
+  "data_point",
+  "average_return_pct",
+  "event_count",
+  "last_price",
+  "strategy_profile",
+  "wall_street_consensus",
+  "expected_revenue_growth",
+  "terminal_verdict",
+  "the_buzz",
+  "the_risk",
+  "generated_at",
+].join(",");
+
 export function generateStaticParams() {
   return listParentCompanies().map((p) => ({
     ticker: p.ticker,
@@ -32,7 +57,7 @@ export async function generateMetadata({
   if (!parent) return { title: "Company — Turbo Fashion Index" };
   return {
     title: `${parent.name} ($${parent.ticker}) — Turbo Fashion Index`,
-    description: `Intelligence terminal for ${parent.name}: child brand search trends vs parent equity.`,
+    description: `Earnings Whisper profile for ${parent.name}: search vs Street revenue estimates, and live catalyst briefing.`,
   };
 }
 
@@ -42,11 +67,11 @@ async function loadCachedInsight(ticker: string): Promise<CompanyBrief | null> {
 
   const { data, error } = await supabase
     .from("ai_insights")
-    .select("*")
+    .select(ASSET_PROFILE_SELECT)
     .eq("ticker", ticker);
 
   if (error || !data?.length) return null;
-  return selectBriefForTicker(data as AiInsightRow[], ticker);
+  return selectBriefForTicker(data as unknown as AiInsightRow[], ticker);
 }
 
 export default async function CompanyPage({
@@ -64,7 +89,7 @@ export default async function CompanyPage({
 
   return (
     <div className="min-h-screen bg-neutral-950">
-      <TerminalChrome subtitle={`${parent.name} · Parent Terminal`} />
+      <TerminalChrome subtitle={`${parent.name} · Earnings Whisper`} />
       <main className="mx-auto max-w-[1600px] p-6">
         <CompanyTerminal parent={parent} initialInsight={insight} />
       </main>

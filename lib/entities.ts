@@ -1,6 +1,6 @@
 /**
  * Canonical relationship map: Parent Companies → Child Brands.
- * Trends are retained below but excluded from active terminal logic (V3).
+ * Earnings Whisper universe — volatile small/mid-cap pure-play retail & hype.
  */
 
 export type EntityCategory = "brand" | "trend";
@@ -23,125 +23,27 @@ export interface ParentCompany {
 }
 
 /**
- * Relationship database — Parent Companies and their Child Brands.
+ * Earnings Whisper universe — curated pure-play retail / hype brands.
+ * Mega-caps purged; focus on small/mid-cap search↔earnings delta setups.
  */
 export const parentCompanies: ParentCompany[] = [
   {
-    name: "VF Corp",
-    ticker: "VFC",
-    childBrands: [
-      "Supreme",
-      "Vans",
-      "The North Face",
-      "Timberland",
-      "Dickies",
-      "Eastpak",
-      "JanSport",
-      "Smartwool",
-    ],
-    domain: "vfc.com",
+    name: "Abercrombie & Fitch",
+    ticker: "ANF",
+    childBrands: ["Abercrombie & Fitch", "Hollister", "Gilly Hicks"],
+    domain: "abercrombie.com",
   },
   {
-    name: "Deckers",
+    name: "Deckers Outdoor",
     ticker: "DECK",
-    childBrands: ["HOKA", "UGG", "Teva", "Sanuk"],
+    childBrands: ["HOKA", "UGG", "Teva"],
     domain: "deckers.com",
   },
   {
-    name: "Tapestry",
-    ticker: "TPR",
-    childBrands: ["Coach", "Kate Spade", "Stuart Weitzman"],
-    domain: "tapestry.com",
-  },
-  {
-    name: "LVMH",
-    ticker: "LVMUY",
-    childBrands: [
-      "Louis Vuitton",
-      "Christian Dior",
-      "Givenchy",
-      "Fendi",
-      "Celine",
-      "Loewe",
-      "Sephora",
-      "Tiffany & Co.",
-      "Bulgari",
-      "TAG Heuer",
-    ],
-    domain: "lvmh.com",
-  },
-  {
-    name: "Amer Sports",
-    ticker: "AS",
-    childBrands: [
-      "Arc'teryx",
-      "Salomon",
-      "Wilson",
-      "Atomic",
-      "Peak Performance",
-    ],
-    domain: "amersports.com",
-  },
-  {
-    name: "Richemont",
-    ticker: "CFRUY",
-    childBrands: [
-      "Cartier",
-      "Van Cleef & Arpels",
-      "Montblanc",
-      "Chloe",
-      "Peter Millar",
-      "Alaïa",
-    ],
-    domain: "richemont.com",
-  },
-  {
-    name: "Nike",
-    ticker: "NKE",
-    childBrands: ["Nike", "Jordan", "Converse"],
-    domain: "nike.com",
-  },
-  {
-    name: "Adidas",
-    ticker: "ADDYY",
-    childBrands: ["Adidas"],
-    domain: "adidas.com",
-  },
-  {
-    name: "On Holding",
-    ticker: "ONON",
-    childBrands: ["On Running"],
-    domain: "on-running.com",
-  },
-  {
-    name: "Columbia Sportswear",
-    ticker: "COLM",
-    childBrands: ["Columbia", "Sorel", "Mountain Hardwear", "prAna"],
-    domain: "columbia.com",
-  },
-  {
-    name: "Levi Strauss",
-    ticker: "LEVI",
-    childBrands: ["Levi's", "Dockers", "Beyond Yoga"],
-    domain: "levi.com",
-  },
-  {
-    name: "Lululemon",
-    ticker: "LULU",
-    childBrands: ["Lululemon"],
-    domain: "lululemon.com",
-  },
-  {
-    name: "Ralph Lauren",
-    ticker: "RL",
-    childBrands: ["Ralph Lauren"],
-    domain: "ralphlauren.com",
-  },
-  {
-    name: "Hermès",
-    ticker: "HESAY",
-    childBrands: ["Hermès"],
-    domain: "hermes.com",
+    name: "Crocs Inc",
+    ticker: "CROX",
+    childBrands: ["Crocs", "HeyDude"],
+    domain: "crocs.com",
   },
   {
     name: "Urban Outfitters",
@@ -155,22 +57,53 @@ export const parentCompanies: ParentCompany[] = [
     domain: "urbanoutfitters.com",
   },
   {
-    name: "American Eagle",
-    ticker: "AEO",
-    childBrands: ["American Eagle"],
-    domain: "ae.com",
-  },
-  {
-    name: "Abercrombie & Fitch",
-    ticker: "ANF",
-    childBrands: ["Abercrombie & Fitch", "Hollister", "Gilly Hicks"],
-    domain: "abercrombie.com",
-  },
-  {
-    name: "Gap Inc.",
+    name: "Gap Inc",
+    // Yahoo Finance lists Gap as GAP (legacy GPS symbol no longer resolves).
     ticker: "GAP",
     childBrands: ["Gap", "Old Navy", "Athleta", "Banana Republic"],
     domain: "gap.com",
+  },
+  {
+    name: "Levi Strauss & Co",
+    ticker: "LEVI",
+    childBrands: ["Levi's", "Dockers", "Beyond Yoga"],
+    domain: "levi.com",
+  },
+  {
+    name: "Boot Barn",
+    ticker: "BOOT",
+    childBrands: ["Boot Barn"],
+    domain: "bootbarn.com",
+  },
+  {
+    name: "On Holding",
+    ticker: "ONON",
+    childBrands: ["On Running"],
+    domain: "on-running.com",
+  },
+  {
+    name: "American Eagle",
+    ticker: "AEO",
+    childBrands: ["American Eagle", "Aerie"],
+    domain: "ae.com",
+  },
+  {
+    name: "Tapestry",
+    ticker: "TPR",
+    childBrands: ["Coach", "Kate Spade", "Stuart Weitzman"],
+    domain: "tapestry.com",
+  },
+  {
+    name: "E.l.f. Beauty",
+    ticker: "ELF",
+    childBrands: ["elf cosmetics"],
+    domain: "elfcosmetics.com",
+  },
+  {
+    name: "Canada Goose",
+    ticker: "GOOS",
+    childBrands: ["Canada Goose"],
+    domain: "canadagoose.com",
   },
 ];
 
@@ -196,19 +129,10 @@ function buildBrandEntities(): EntityMeta[] {
 }
 
 /**
- * V3: Trends deactivated for the Curated Intelligence Terminal.
+ * Trends deactivated for the Curated Intelligence Terminal.
  * Kept for possible future reactivation / historical scripts.
  */
-export const INACTIVE_TREND_ENTITIES: EntityMeta[] = [
-  // { name: "Hypebeast", category: "trend" },
-  // { name: "Gorpcore", category: "trend" },
-  // { name: "Athleisure", category: "trend" },
-  // { name: "Fast Fashion", category: "trend" },
-  // { name: "Quiet Luxury", category: "trend" },
-  // { name: "Old Money", category: "trend" },
-  // { name: "Vintage", category: "trend" },
-  // { name: "Y2K Fashion", category: "trend" },
-];
+export const INACTIVE_TREND_ENTITIES: EntityMeta[] = [];
 
 /** Active entities = child brands only (no trends). */
 export const entities: EntityMeta[] = buildBrandEntities();

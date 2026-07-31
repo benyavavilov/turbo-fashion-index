@@ -6,7 +6,11 @@ import {
   ArrowLeft,
   Bot,
   Loader2,
+  Newspaper,
   RefreshCw,
+  Scale,
+  ShieldAlert,
+  Target,
 } from "lucide-react";
 import {
   Area,
@@ -24,11 +28,13 @@ import { getTrendData } from "@/app/actions";
 import CompanyChat from "@/app/components/company-chat";
 import type { ParentCompany } from "@/lib/entities";
 import {
-  INSIGHT_BULLET_LABELS,
   INSIGHT_GENERATING_FALLBACK,
-  directionToKind,
+  formatExpectedRevenueGrowth,
+  formatSearchGrowthPct,
+  formatWallStreetConsensus,
+  mismatchToAlertBadge,
   type CompanyBrief,
-  type InsightDirection,
+  type EarningsMismatch,
 } from "@/lib/ai-insights";
 import {
   filterByTimeframe,
@@ -218,30 +224,54 @@ function CompanyChartTooltip({ active, payload, label }: ChartTooltipProps) {
   );
 }
 
-function directionBadgeClass(direction: InsightDirection | null | undefined) {
-  if (direction === "UP") {
-    return "border-emerald-500/40 bg-emerald-500/20 text-emerald-200";
+function wallStreetBadgeClass(raw: string | null | undefined) {
+  const key = (raw ?? "").toLowerCase();
+  if (
+    key.includes("buy") ||
+    key.includes("outperform") ||
+    key.includes("overweight") ||
+    key.includes("strong_buy")
+  ) {
+    return "border-emerald-500/40 bg-emerald-500/15 text-emerald-200";
   }
-  if (direction === "DOWN") {
-    return "border-rose-500/40 bg-rose-500/20 text-rose-200";
+  if (
+    key.includes("sell") ||
+    key.includes("underperform") ||
+    key.includes("underweight") ||
+    key.includes("strong_sell")
+  ) {
+    return "border-rose-500/40 bg-rose-500/15 text-rose-200";
   }
-  if (direction === "SAFE") {
-    return "border-sky-500/35 bg-sky-500/15 text-sky-200";
+  if (key.includes("hold") || key.includes("neutral")) {
+    return "border-amber-500/35 bg-amber-500/12 text-amber-200";
   }
   return "border-neutral-600/50 bg-neutral-800/70 text-neutral-300";
 }
 
-function directionPanelAccent(direction: InsightDirection | null | undefined) {
-  if (direction === "UP") {
+function directionPanelAccent(mismatch: EarningsMismatch | null | undefined) {
+  if (mismatch === "BEAT_LIKELY") {
     return "border-emerald-500/30 bg-gradient-to-b from-emerald-500/12 via-neutral-950/80 to-neutral-950";
   }
-  if (direction === "DOWN") {
+  if (mismatch === "MISS_LIKELY") {
     return "border-rose-500/30 bg-gradient-to-b from-rose-500/12 via-neutral-950/80 to-neutral-950";
   }
-  if (direction === "SAFE") {
+  if (mismatch === "PRICED_IN") {
     return "border-amber-500/25 bg-gradient-to-b from-sky-500/10 via-amber-500/8 to-neutral-950";
   }
   return "border-neutral-800/80 bg-neutral-900/40";
+}
+
+function directionBadgeClass(mismatch: EarningsMismatch | null | undefined) {
+  if (mismatch === "MISS_LIKELY") {
+    return "border-rose-400/50 bg-rose-500/20 text-rose-200 shadow-[0_0_18px_rgba(244,63,94,0.16)]";
+  }
+  if (mismatch === "BEAT_LIKELY") {
+    return "border-emerald-400/50 bg-emerald-500/20 text-emerald-200 shadow-[0_0_18px_rgba(16,185,129,0.16)]";
+  }
+  if (mismatch === "PRICED_IN") {
+    return "border-sky-400/40 bg-sky-500/15 text-sky-200";
+  }
+  return "border-neutral-700 bg-neutral-900 text-neutral-300";
 }
 
 export default function CompanyTerminal({
@@ -252,7 +282,10 @@ export default function CompanyTerminal({
   initialInsight?: CompanyBrief | null;
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
-  const [activeBrands, setActiveBrands] = useState<string[]>([]);
+  /** Default all child brands on so search lines + left Y-axis have series. */
+  const [activeBrands, setActiveBrands] = useState<string[]>(() => [
+    ...parent.childBrands,
+  ]);
   const [trendRows, setTrendRows] = useState<TrendDatum[]>([]);
   const [stockMap, setStockMap] = useState<Map<string, number>>(new Map());
   const [lastPrice, setLastPrice] = useState<number | null>(null);
@@ -263,6 +296,10 @@ export default function CompanyTerminal({
   const [studies, setStudies] = useState<
     { brand: string; result: EventStudyResult }[]
   >([]);
+
+  useEffect(() => {
+    setActiveBrands([...parent.childBrands]);
+  }, [parent.ticker, parent.childBrands]);
 
   const loadMarket = useCallback(async () => {
     setLoading(true);
@@ -314,11 +351,32 @@ export default function CompanyTerminal({
     void loadMarket();
   }, [loadMarket]);
 
+  /**
+   * Brands that actually exist as keys in trend data (exact dataKey match for <Line>).
+   * Falls back to activeBrands so toggles still reserve series slots while loading.
+   */
+  const chartBrandKeys = useMemo(() => {
+    if (trendRows.length === 0) return activeBrands;
+    const available = new Set<string>();
+    for (const row of trendRows) {
+      for (const key of Object.keys(row)) {
+        if (key !== "date" && key !== STOCK_KEY) available.add(key);
+      }
+    }
+    const matched = activeBrands.filter((b) => available.has(b));
+    return matched.length > 0 ? matched : activeBrands;
+  }, [trendRows, activeBrands]);
+
   /** Dense weekly base series (no catalyst scatter). */
   const baseChartData = useMemo(() => {
     const merged = mergeStockPrices(trendRows, stockMap, STOCK_KEY);
     const windowed = filterByTimeframe(merged, timeframe);
-    const aligned = groupAndAlignChartData(windowed, activeBrands, [STOCK_KEY]);
+    // Keys passed here become the object keys on each chart row — must match Line dataKey.
+    const aligned = groupAndAlignChartData(
+      windowed,
+      chartBrandKeys,
+      [STOCK_KEY]
+    );
     return sortByDateAsc(
       aligned.map(
         (row): TrendDatum => ({
@@ -327,7 +385,7 @@ export default function CompanyTerminal({
         })
       )
     );
-  }, [trendRows, stockMap, timeframe, activeBrands]);
+  }, [trendRows, stockMap, timeframe, chartBrandKeys]);
 
   /**
    * Single continuous timeline for Recharts: inject catalyst metadata onto
@@ -385,13 +443,27 @@ export default function CompanyTerminal({
   const chartContext = useMemo((): ChartContext => {
     const briefingParts: string[] = [];
 
-    if (insight?.found) {
+    if (insight?.found && insight.hasAssetProfile) {
+      if (insight.terminalVerdict) {
+        briefingParts.push(`Terminal verdict: ${insight.terminalVerdict}`);
+      }
+      if (insight.wallStreetConsensus) {
+        briefingParts.push(
+          `Wall Street consensus: ${formatWallStreetConsensus(insight.wallStreetConsensus)}`
+        );
+      }
+      if (insight.strategyProfile) {
+        briefingParts.push(`Strategy profile: ${insight.strategyProfile}`);
+      }
+      if (insight.theBuzz) {
+        briefingParts.push(`The buzz: ${insight.theBuzz}`);
+      }
+      if (insight.theRisk) {
+        briefingParts.push(`The risk: ${insight.theRisk}`);
+      }
+    } else if (insight?.found) {
       briefingParts.push(
-        `Cached insight (${insight.direction ?? insight.sentiment}): ${insight.heroText}`,
-        ...insight.bullets.map((b, i) => {
-          const label = INSIGHT_BULLET_LABELS[i] ?? `Point ${i + 1}`;
-          return `• ${label}: ${b}`;
-        })
+        `Cached insight (${insight.earningsMismatch ?? insight.sentiment}): ${insight.heroText}`
       );
     }
 
@@ -542,6 +614,9 @@ export default function CompanyTerminal({
                     />
                     <YAxis
                       yAxisId="left"
+                      orientation="left"
+                      domain={[0, "auto"]}
+                      allowDataOverflow={false}
                       tick={{ fill: "#737373", fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
@@ -557,6 +632,7 @@ export default function CompanyTerminal({
                     <YAxis
                       yAxisId="right"
                       orientation="right"
+                      domain={["auto", "auto"]}
                       tick={{ fill: "#737373", fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
@@ -602,14 +678,21 @@ export default function CompanyTerminal({
                       dot={false}
                       isAnimationActive={false}
                     />
-                    {activeBrands.map((brand, i) => (
+                    {chartBrandKeys.map((brand) => {
+                      const colorIdx = Math.max(
+                        0,
+                        parent.childBrands.indexOf(brand)
+                      );
+                      return (
                       <Line
                         key={brand}
                         yAxisId="left"
                         type="monotone"
                         dataKey={brand}
                         name={brand}
-                        stroke={BRAND_COLORS[i % BRAND_COLORS.length]}
+                        stroke={
+                          BRAND_COLORS[colorIdx % BRAND_COLORS.length]
+                        }
                         strokeWidth={2}
                         connectNulls
                         isAnimationActive={false}
@@ -623,7 +706,8 @@ export default function CompanyTerminal({
                         )}
                         activeDot={false}
                       />
-                    ))}
+                      );
+                    })}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -666,62 +750,125 @@ export default function CompanyTerminal({
         </section>
 
         <aside
-          className={`flex flex-col rounded-xl border p-5 ${directionPanelAccent(insight?.direction)}`}
+          className={`flex flex-col rounded-xl border p-5 ${directionPanelAccent(insight?.earningsMismatch)}`}
         >
-          <div className="mb-4 flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/15 ring-1 ring-inset ring-violet-500/30">
-              <Bot className="h-5 w-5 text-violet-300" />
+          <div className="mb-5 flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/30">
+              <Bot className="h-5 w-5 text-cyan-300" />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-neutral-100">
-                AI Analyst
+              <h3 className="text-base font-semibold tracking-tight text-neutral-50">
+                Asset Profile
               </h3>
-              <p className="text-xs text-neutral-500">
-                Pre-computed insight for ${parent.ticker}
+              <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+                Earnings Whisper · ${parent.ticker}
               </p>
             </div>
           </div>
 
-          {insight?.found ? (
+          {insight?.found && insight.hasAssetProfile ? (
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${directionBadgeClass(insight.direction)}`}
-                >
-                  {insight.direction
-                    ? directionToKind(insight.direction)
-                    : insight.sentiment}
-                </span>
-                {insight.confidenceLabel && (
+              {/* The Delta — Bloomberg-style mismatch block */}
+              <section className="rounded-lg border border-neutral-700/70 bg-neutral-950/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400/90">
+                    The Delta
+                  </p>
+                  {insight.earningsMismatch && (
+                    <span
+                      className={`inline-flex rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${directionBadgeClass(insight.earningsMismatch)}`}
+                    >
+                      {mismatchToAlertBadge(insight.earningsMismatch)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-neutral-800 bg-neutral-800">
+                  <div className="bg-neutral-950 px-3 py-4">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                      Wall Street Rev Est
+                    </p>
+                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-neutral-50">
+                      {formatExpectedRevenueGrowth(insight.expectedRevenueGrowth)}
+                    </p>
+                    <p className="mt-1 text-[10px] text-neutral-600">
+                      Current quarter (+0q)
+                    </p>
+                  </div>
+                  <div className="bg-neutral-950 px-3 py-4">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                      YoY Search Growth
+                    </p>
+                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-neutral-50">
+                      {formatSearchGrowthPct(insight.momentumPct)}
+                    </p>
+                    <p className="mt-1 text-[10px] text-neutral-600">
+                      Sanitized 4w MA YoY
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-800 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                    Street rating
+                  </span>
                   <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-wide ${
-                      (insight.confidenceScore ?? 0) >= 8
-                        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
-                        : (insight.confidenceScore ?? 0) <= 4
-                          ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
-                          : "border-indigo-500/40 bg-indigo-500/15 text-indigo-200"
-                    }`}
-                    title={insight.confidenceReason ?? undefined}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${wallStreetBadgeClass(insight.wallStreetConsensus)}`}
                   >
-                    {insight.confidenceLabel}
+                    <Scale className="h-3 w-3 opacity-80" />
+                    {formatWallStreetConsensus(insight.wallStreetConsensus)}
                   </span>
-                )}
-                {insight.dataPoint && (
-                  <span className="rounded-md border border-neutral-700/80 bg-neutral-900/80 px-2 py-1 font-mono text-[11px] text-neutral-300">
-                    {insight.dataPoint}
-                  </span>
-                )}
-              </div>
+                </div>
+              </section>
 
-              <h4 className="text-sm font-semibold leading-snug text-neutral-50">
-                {insight.heroText}
-              </h4>
-
-              {insight.confidenceReason && (
-                <p className="text-[11px] leading-snug text-neutral-500">
-                  {insight.confidenceReason}
+              {/* Terminal verdict */}
+              <section className="rounded-lg border border-neutral-700/70 bg-neutral-950/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400/90">
+                  Terminal Verdict
                 </p>
-              )}
+                <p className="text-[15px] font-semibold leading-snug tracking-tight text-neutral-50">
+                  {insight.terminalVerdict}
+                </p>
+              </section>
+
+              {/* Intelligence grid */}
+              <div className="grid gap-3">
+                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Target className="h-3.5 w-3.5 text-violet-300" />
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-300/90">
+                      Strategy Profile
+                    </p>
+                  </div>
+                  <p className="text-sm leading-relaxed text-neutral-200">
+                    {insight.strategyProfile ?? "Profile unavailable."}
+                  </p>
+                </section>
+
+                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Newspaper className="h-3.5 w-3.5 text-amber-300" />
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/90">
+                      The Buzz
+                    </p>
+                  </div>
+                  <p className="text-sm leading-relaxed text-neutral-200">
+                    {insight.theBuzz ?? "No catalyst logged yet."}
+                  </p>
+                </section>
+
+                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <ShieldAlert className="h-3.5 w-3.5 text-rose-300" />
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300/90">
+                      The Risk
+                    </p>
+                  </div>
+                  <p className="text-sm leading-relaxed text-neutral-200">
+                    {insight.theRisk ?? "Risk assessment unavailable."}
+                  </p>
+                </section>
+              </div>
 
               {insight.brand && insight.brand !== parent.name && (
                 <p className="text-[11px] text-neutral-500">
@@ -729,17 +876,6 @@ export default function CompanyTerminal({
                   <span className="text-neutral-400">{insight.brand}</span>
                 </p>
               )}
-
-              <ul className="space-y-3">
-                {insight.bullets.map((b, i) => (
-                  <li key={i} className="text-xs leading-relaxed">
-                    <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
-                      {INSIGHT_BULLET_LABELS[i] ?? `Point ${i + 1}`}
-                    </p>
-                    <p className="text-neutral-300">{b}</p>
-                  </li>
-                ))}
-              </ul>
 
               {insight.generatedAt && (
                 <p className="pt-1 text-[10px] uppercase tracking-wider text-neutral-600">
@@ -752,8 +888,11 @@ export default function CompanyTerminal({
               )}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-neutral-700/80 bg-neutral-950/40 px-4 py-6 text-center">
-              <p className="text-sm leading-relaxed text-neutral-400">
+            <div className="rounded-lg border border-dashed border-neutral-700/80 bg-neutral-950/40 px-4 py-8 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                Asset Profile
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-neutral-400">
                 {INSIGHT_GENERATING_FALLBACK}
               </p>
             </div>

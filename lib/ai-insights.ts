@@ -1,21 +1,23 @@
 /**
  * Shared types + mappers for the pre-computed `ai_insights` ETL table.
  * Rows are parent-level (one insight per ticker); `brand` holds top child drivers.
+ * Earnings Whisper: primary call is `earnings_mismatch` (BEAT / MISS / PRICED_IN).
  */
 
+/** @deprecated Prefer EarningsMismatch — kept for legacy row fallback. */
 export type InsightDirection = "UP" | "DOWN" | "SAFE";
 
+/** Earnings Whisper mismatch vs Wall Street revenue estimates. */
+export type EarningsMismatch = "BEAT_LIKELY" | "MISS_LIKELY" | "PRICED_IN";
+
 /** Home / Alpha Feed card kinds (UI labels). */
-export type AlphaCardKind =
-  | "PROJECTED UP"
-  | "PROJECTED DOWN"
-  | "SAFE OPTION";
+export type AlphaCardKind = EarningsMismatch;
 
 /** Multi-strategy dashboard slots. */
 export type StrategySlotId =
-  | "TOP_MOMENTUM_BUY"
-  | "TOP_CONTRARIAN_SHORT"
-  | "SAFE_VALUE_HOLD";
+  | "TOP_BEAT_LIKELY"
+  | "TOP_MISS_LIKELY"
+  | "TOP_PRICED_IN";
 
 export const INSIGHT_BULLET_LABELS = [
   "The Search Trend",
@@ -35,7 +37,10 @@ export interface AiInsightRow {
   parent_name: string;
   /** Top child-brand drivers (joined), not a child-level insight key. */
   brand: string;
-  direction: InsightDirection;
+  /** Primary Earnings Whisper call. */
+  earnings_mismatch?: EarningsMismatch | null;
+  /** @deprecated Prefer earnings_mismatch. */
+  direction?: InsightDirection | null;
   momentum_pct: number | null;
   correlation: number | null;
   hero_text: string;
@@ -47,6 +52,13 @@ export interface AiInsightRow {
   last_price: number | null;
   confidence_score?: number | null;
   reasoning_for_confidence?: string | null;
+  /** Fluid Asset Profile handbook fields (ai_insights). */
+  strategy_profile?: string | null;
+  wall_street_consensus?: string | null;
+  expected_revenue_growth?: string | null;
+  terminal_verdict?: string | null;
+  the_buzz?: string | null;
+  the_risk?: string | null;
   generated_at: string;
 }
 
@@ -65,7 +77,12 @@ export interface AlphaFeedCard {
   lastPrice: number | null;
   sentiment?: "POSITIVE" | "NEGATIVE" | "NEUTRAL";
   reason?: string;
+  earningsMismatch: EarningsMismatch;
+  /** @deprecated Prefer earningsMismatch. */
   direction: InsightDirection;
+  /** Sanitized YoY search growth % (momentum_pct). */
+  momentumPct: number | null;
+  expectedRevenueGrowth: string | null;
   confidenceScore: number | null;
   confidenceBand: ConfidenceBand | null;
   confidenceReason: string | null;
@@ -96,6 +113,8 @@ export interface CompanyBrief {
   headline: string;
   heroText: string;
   sentiment: "POSITIVE" | "NEGATIVE" | "NEUTRAL";
+  earningsMismatch: EarningsMismatch | null;
+  /** @deprecated Prefer earningsMismatch. */
   direction: InsightDirection | null;
   bullets: string[];
   /** False when no cached row exists yet. */
@@ -106,6 +125,17 @@ export interface CompanyBrief {
   confidenceScore?: number | null;
   confidenceLabel?: string | null;
   confidenceReason?: string | null;
+  /** Ultimate Handbook / Asset Profile fields. */
+  strategyProfile?: string | null;
+  wallStreetConsensus?: string | null;
+  expectedRevenueGrowth?: string | null;
+  /** Sanitized YoY search growth % (momentum_pct). */
+  momentumPct?: number | null;
+  terminalVerdict?: string | null;
+  theBuzz?: string | null;
+  theRisk?: string | null;
+  /** True when at least one handbook field is populated. */
+  hasAssetProfile?: boolean;
 }
 
 export function confidenceBandFromScore(
@@ -125,24 +155,84 @@ export function formatConfidenceLabel(
   return `Confidence: ${band} / ${Math.round(score)}`;
 }
 
+/** Normalize mismatch from new column or legacy direction. */
+export function resolveEarningsMismatch(
+  row: Pick<AiInsightRow, "earnings_mismatch" | "direction">
+): EarningsMismatch {
+  const raw = row.earnings_mismatch?.trim().toUpperCase();
+  if (raw === "BEAT_LIKELY" || raw === "MISS_LIKELY" || raw === "PRICED_IN") {
+    return raw;
+  }
+  if (row.direction === "UP") return "BEAT_LIKELY";
+  if (row.direction === "DOWN") return "MISS_LIKELY";
+  return "PRICED_IN";
+}
+
+export function mismatchToKind(mismatch: EarningsMismatch): AlphaCardKind {
+  return mismatch;
+}
+
+export function mismatchToVerdict(mismatch: EarningsMismatch): string {
+  return mismatch.replace(/_/g, " ");
+}
+
+/** High-visibility Alpha Feed / Asset Profile badge copy. */
+export function mismatchToAlertBadge(mismatch: EarningsMismatch): string {
+  if (mismatch === "BEAT_LIKELY") return "EARNINGS BEAT PROJECTED";
+  if (mismatch === "MISS_LIKELY") return "EARNINGS MISS PROJECTED";
+  return "PRICED IN";
+}
+
+/** Format YoY search growth for delta displays. */
+export function formatSearchGrowthPct(
+  momentumPct: number | null | undefined
+): string {
+  if (momentumPct == null || !Number.isFinite(momentumPct)) return "n/a";
+  return `${momentumPct >= 0 ? "+" : ""}${momentumPct.toFixed(1)}%`;
+}
+
+/** Format Street revenue growth estimate for delta displays. */
+export function formatExpectedRevenueGrowth(
+  raw: string | null | undefined
+): string {
+  if (!raw || !raw.trim() || raw.trim().toUpperCase() === "N/A") return "N/A";
+  return raw.trim();
+}
+
+export function mismatchToSentiment(
+  mismatch: EarningsMismatch
+): "POSITIVE" | "NEGATIVE" | "NEUTRAL" {
+  if (mismatch === "BEAT_LIKELY") return "POSITIVE";
+  if (mismatch === "MISS_LIKELY") return "NEGATIVE";
+  return "NEUTRAL";
+}
+
+/** Map Earnings Whisper → legacy direction for any remaining consumers. */
+export function mismatchToDirection(
+  mismatch: EarningsMismatch
+): InsightDirection {
+  if (mismatch === "BEAT_LIKELY") return "UP";
+  if (mismatch === "MISS_LIKELY") return "DOWN";
+  return "SAFE";
+}
+
+/** @deprecated Prefer mismatchToKind. */
 export function directionToKind(direction: InsightDirection): AlphaCardKind {
-  if (direction === "UP") return "PROJECTED UP";
-  if (direction === "DOWN") return "PROJECTED DOWN";
-  return "SAFE OPTION";
+  if (direction === "UP") return "BEAT_LIKELY";
+  if (direction === "DOWN") return "MISS_LIKELY";
+  return "PRICED_IN";
 }
 
+/** @deprecated Prefer mismatchToVerdict. */
 export function directionToVerdict(direction: InsightDirection): string {
-  if (direction === "UP") return "PROJECTED UP";
-  if (direction === "DOWN") return "PROJECTED DOWN";
-  return "SAFE OPTION";
+  return mismatchToVerdict(directionToKind(direction));
 }
 
+/** @deprecated Prefer mismatchToSentiment. */
 export function directionToSentiment(
   direction: InsightDirection
 ): "POSITIVE" | "NEGATIVE" | "NEUTRAL" {
-  if (direction === "UP") return "POSITIVE";
-  if (direction === "DOWN") return "NEGATIVE";
-  return "NEUTRAL";
+  return mismatchToSentiment(directionToKind(direction));
 }
 
 /** Normalize to up to 4 narrative bullets (pad/truncate safely). */
@@ -174,14 +264,14 @@ export function dedupeParentInsights(rows: AiInsightRow[]): AiInsightRow[] {
 }
 
 export function insightRowToCard(row: AiInsightRow): AlphaFeedCard {
-  const direction = row.direction;
+  const earningsMismatch = resolveEarningsMismatch(row);
   const confidenceScore =
     typeof row.confidence_score === "number" &&
     Number.isFinite(row.confidence_score)
       ? Math.max(1, Math.min(10, Math.round(row.confidence_score)))
       : null;
   return {
-    kind: directionToKind(direction),
+    kind: mismatchToKind(earningsMismatch),
     parentName: row.parent_name,
     ticker: row.ticker,
     brand: row.brand,
@@ -193,12 +283,18 @@ export function insightRowToCard(row: AiInsightRow): AlphaFeedCard {
         : "—"),
     averageReturnPct: row.average_return_pct ?? row.momentum_pct ?? 0,
     eventCount: row.event_count ?? 0,
-    verdict: directionToVerdict(direction),
+    verdict: mismatchToVerdict(earningsMismatch),
     bullets: asBulletList(row.bullet_points),
     lastPrice: row.last_price,
-    sentiment: row.sentiment ?? directionToSentiment(direction),
+    sentiment: row.sentiment ?? mismatchToSentiment(earningsMismatch),
     reason: row.hero_text,
-    direction,
+    earningsMismatch,
+    direction: mismatchToDirection(earningsMismatch),
+    momentumPct:
+      typeof row.momentum_pct === "number" && Number.isFinite(row.momentum_pct)
+        ? row.momentum_pct
+        : null,
+    expectedRevenueGrowth: row.expected_revenue_growth?.trim() || null,
     confidenceScore,
     confidenceBand: confidenceBandFromScore(confidenceScore),
     confidenceReason: row.reasoning_for_confidence?.trim() || null,
@@ -211,36 +307,33 @@ function firstRow(rows: AiInsightRow[] | null | undefined): AiInsightRow | null 
 }
 
 /**
- * Build the three strategy slots from already-filtered query results
- * (or from a full table dump via {@link selectStrategyDashboard}).
+ * Build the three Earnings Whisper strategy slots.
  */
 export function buildStrategySlots(input: {
-  momentumBuy: AiInsightRow | null;
-  contrarianShort: AiInsightRow | null;
-  safeValueHold: AiInsightRow | null;
+  beatLikely: AiInsightRow | null;
+  missLikely: AiInsightRow | null;
+  pricedIn: AiInsightRow | null;
 }): StrategySlot[] {
   return [
     {
-      id: "TOP_MOMENTUM_BUY",
-      title: "Top Momentum Buy",
-      subtitle: "Strongest UP setup by YoY search growth",
-      card: input.momentumBuy ? insightRowToCard(input.momentumBuy) : null,
+      id: "TOP_BEAT_LIKELY",
+      title: "Beat Likely",
+      subtitle: "Search hype outpacing Street revenue estimates",
+      card: input.beatLikely ? insightRowToCard(input.beatLikely) : null,
       emptyMessage: STRATEGY_EMPTY_MESSAGE,
     },
     {
-      id: "TOP_CONTRARIAN_SHORT",
-      title: "Top Contrarian Short",
-      subtitle: "Sharpest DOWN setup by search fade",
-      card: input.contrarianShort
-        ? insightRowToCard(input.contrarianShort)
-        : null,
+      id: "TOP_MISS_LIKELY",
+      title: "Miss Likely",
+      subtitle: "Search demand lagging Street expectations",
+      card: input.missLikely ? insightRowToCard(input.missLikely) : null,
       emptyMessage: STRATEGY_EMPTY_MESSAGE,
     },
     {
-      id: "SAFE_VALUE_HOLD",
-      title: "Safe Value Hold",
-      subtitle: "Best SAFE setup by correlation / momentum",
-      card: input.safeValueHold ? insightRowToCard(input.safeValueHold) : null,
+      id: "TOP_PRICED_IN",
+      title: "Priced In",
+      subtitle: "Hype and Street estimates roughly aligned",
+      card: input.pricedIn ? insightRowToCard(input.pricedIn) : null,
       emptyMessage: STRATEGY_EMPTY_MESSAGE,
     },
   ];
@@ -248,26 +341,25 @@ export function buildStrategySlots(input: {
 
 /**
  * Client-side picker when a single SELECT * dump is available.
- * Prefer dedicated ordered queries in the API when possible.
  */
 export function selectStrategyDashboard(rows: AiInsightRow[]): StrategySlot[] {
   const parents = dedupeParentInsights(rows);
 
-  const momentumBuy =
+  const beatLikely =
     [...parents]
-      .filter((r) => r.direction === "UP")
+      .filter((r) => resolveEarningsMismatch(r) === "BEAT_LIKELY")
       .sort((a, b) => (b.momentum_pct ?? -Infinity) - (a.momentum_pct ?? -Infinity))[0] ??
     null;
 
-  const contrarianShort =
+  const missLikely =
     [...parents]
-      .filter((r) => r.direction === "DOWN")
+      .filter((r) => resolveEarningsMismatch(r) === "MISS_LIKELY")
       .sort((a, b) => (a.momentum_pct ?? Infinity) - (b.momentum_pct ?? Infinity))[0] ??
     null;
 
-  const safeValueHold =
+  const pricedIn =
     [...parents]
-      .filter((r) => r.direction === "SAFE")
+      .filter((r) => resolveEarningsMismatch(r) === "PRICED_IN")
       .sort((a, b) => {
         const corrDelta =
           Math.abs(b.correlation ?? 0) - Math.abs(a.correlation ?? 0);
@@ -276,9 +368,9 @@ export function selectStrategyDashboard(rows: AiInsightRow[]): StrategySlot[] {
       })[0] ?? null;
 
   return buildStrategySlots({
-    momentumBuy,
-    contrarianShort,
-    safeValueHold,
+    beatLikely,
+    missLikely,
+    pricedIn,
   });
 }
 
@@ -336,11 +428,25 @@ export function selectBriefForTicker(
     Number.isFinite(best.confidence_score)
       ? Math.max(1, Math.min(10, Math.round(best.confidence_score)))
       : null;
+
+  const earningsMismatch = resolveEarningsMismatch(best);
+  const strategyProfile = best.strategy_profile?.trim() || null;
+  const wallStreetConsensus = best.wall_street_consensus?.trim() || null;
+  const expectedRevenueGrowth = best.expected_revenue_growth?.trim() || null;
+  const terminalVerdict =
+    best.terminal_verdict?.trim() || best.hero_text?.trim() || null;
+  const theBuzz = best.the_buzz?.trim() || null;
+  const theRisk = best.the_risk?.trim() || null;
+  const hasAssetProfile = Boolean(
+    strategyProfile || terminalVerdict || theBuzz || theRisk
+  );
+
   return {
-    headline: best.hero_text,
-    heroText: best.hero_text,
-    sentiment: best.sentiment ?? directionToSentiment(best.direction),
-    direction: best.direction,
+    headline: terminalVerdict ?? best.hero_text,
+    heroText: terminalVerdict ?? best.hero_text,
+    sentiment: best.sentiment ?? mismatchToSentiment(earningsMismatch),
+    earningsMismatch,
+    direction: mismatchToDirection(earningsMismatch),
     bullets,
     found: true,
     dataPoint: best.data_point,
@@ -349,10 +455,31 @@ export function selectBriefForTicker(
     confidenceScore,
     confidenceLabel: formatConfidenceLabel(confidenceScore),
     confidenceReason: best.reasoning_for_confidence?.trim() || null,
+    strategyProfile,
+    wallStreetConsensus,
+    expectedRevenueGrowth,
+    momentumPct:
+      typeof best.momentum_pct === "number" && Number.isFinite(best.momentum_pct)
+        ? best.momentum_pct
+        : null,
+    terminalVerdict,
+    theBuzz,
+    theRisk,
+    hasAssetProfile,
   };
 }
 
 export { firstRow };
 
 export const INSIGHT_GENERATING_FALLBACK =
-  "Insight currently generating. Check back after the next pipeline update.";
+  "Asset Profile generating… check back after the next pipeline run.";
+
+export function formatWallStreetConsensus(
+  raw: string | null | undefined
+): string {
+  if (!raw || !raw.trim() || raw.trim().toUpperCase() === "N/A") return "N/A";
+  return raw
+    .trim()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}

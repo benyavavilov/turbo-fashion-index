@@ -41,7 +41,7 @@ export default function Home() {
         </section>
 
         <p className="text-center text-xs text-neutral-600">
-          High-conviction setups · pre-computed AI insights · live market chat
+          High-conviction Earnings Whisper setups · pre-computed AI insights · live market chat
         </p>
       </main>
     </div>

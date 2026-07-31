@@ -6,5 +6,6 @@ export type {
   AlphaCardKind,
   AlphaFeedCard,
   AlphaFeedResponse,
+  EarningsMismatch,
   InsightDirection,
 } from "@/lib/ai-insights";

@@ -75,18 +75,33 @@ async function fetchRecentTrends(brandNames: string[]): Promise<TrendDatum[]> {
   if (!entityRows?.length) return [];
 
   const entityIds = entityRows.map((row) => row.id as string);
-  const { data: rows, error } = await supabase
-    .from("market_metrics")
-    .select(
-      "recorded_date, interest_value, tracked_entities!inner(name, category)"
-    )
-    .in("entity_id", entityIds)
-    .gte("recorded_date", cutoffIso)
-    .order("recorded_date", { ascending: true })
-    .limit(5000);
 
-  if (error) throw error;
-  return reshapeForRecharts((rows ?? []) as unknown as MetricJoinRow[]);
+  // PostgREST max_rows defaults to 1000 — page past that ceiling.
+  const PAGE_SIZE = 1000;
+  const MAX_ROWS = 25000;
+  const allRows: MetricJoinRow[] = [];
+
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const to = Math.min(from + PAGE_SIZE - 1, MAX_ROWS - 1);
+    const { data: page, error } = await supabase
+      .from("market_metrics")
+      .select(
+        "recorded_date, interest_value, tracked_entities!inner(name, category)"
+      )
+      .in("entity_id", entityIds)
+      .gte("recorded_date", cutoffIso)
+      .order("recorded_date", { ascending: true })
+      .range(from, to)
+      .limit(25000);
+
+    if (error) throw error;
+    if (!page?.length) break;
+
+    allRows.push(...(page as unknown as MetricJoinRow[]));
+    if (page.length < PAGE_SIZE) break;
+  }
+
+  return reshapeForRecharts(allRows);
 }
 
 export async function POST(req: Request) {

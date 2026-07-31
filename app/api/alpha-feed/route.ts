@@ -12,8 +12,34 @@ export const maxDuration = 30;
 
 const FEED_LIMIT = 6;
 
+const FEED_SELECT = [
+  "ticker",
+  "parent_name",
+  "brand",
+  "earnings_mismatch",
+  "direction",
+  "momentum_pct",
+  "expected_revenue_growth",
+  "correlation",
+  "hero_text",
+  "bullet_points",
+  "sentiment",
+  "data_point",
+  "average_return_pct",
+  "event_count",
+  "last_price",
+  "confidence_score",
+  "reasoning_for_confidence",
+  "strategy_profile",
+  "wall_street_consensus",
+  "terminal_verdict",
+  "the_buzz",
+  "the_risk",
+  "generated_at",
+].join(",");
+
 /**
- * High-conviction Alpha Feed: top insights by confidence, then |momentum|.
+ * High-conviction Alpha Feed: top Earnings Whisper alerts by confidence, then |momentum|.
  * No live Gemini — run `npm run generate:insights` to refresh.
  */
 export async function POST() {
@@ -31,13 +57,15 @@ export async function POST() {
       );
     }
 
-    const { data, error } = await supabase.from("ai_insights").select("*");
+    const { data, error } = await supabase
+      .from("ai_insights")
+      .select(FEED_SELECT);
 
     if (error) {
       throw new Error(error.message);
     }
 
-    const rows = (data ?? []) as AiInsightRow[];
+    const rows = (data ?? []) as unknown as AiInsightRow[];
     // confidence_score DESC, then ABS(momentum_pct) DESC (client-side;
     // PostgREST has no ABS order without an RPC).
     const cards = selectHighConvictionInsights(rows, FEED_LIMIT);

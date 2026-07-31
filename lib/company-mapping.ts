@@ -1,5 +1,5 @@
 /**
- * Convenience re-export of the parent ↔ child relationship database.
+ * Convenience re-export of the Earnings Whisper parent ↔ child universe.
  * Prefer importing from `@/lib/entities` in new code.
  */
 export {

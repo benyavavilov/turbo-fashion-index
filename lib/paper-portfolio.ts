@@ -79,6 +79,8 @@ export function isBullishVerdict(verdict: string): boolean {
     v.includes("LONG") ||
     v.includes("ACCUMULATE") ||
     v.includes("PROJECTED UP") ||
+    v.includes("BEAT_LIKELY") ||
+    v.includes("BEAT LIKELY") ||
     v === "UP"
   );
 }
@@ -91,6 +93,8 @@ export function isBearishVerdict(verdict: string): boolean {
     v.includes("CUT") ||
     v.includes("EXIT") ||
     v.includes("PROJECTED DOWN") ||
+    v.includes("MISS_LIKELY") ||
+    v.includes("MISS LIKELY") ||
     v === "DOWN"
   );
 }

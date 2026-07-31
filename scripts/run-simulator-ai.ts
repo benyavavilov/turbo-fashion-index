@@ -1,18 +1,20 @@
 /**
- * run-simulator.ts — V5 Walk-Forward Portfolio Simulator
+ * run-simulator-ai.ts — AI-Filtered Walk-Forward Simulator
  *
- * Hybrid Capital Allocation + Rolling Window path-dependency batch:
- * 20% max position size, opportunity-cost replacement exits, T-Bill yield,
- * and shifts [0,1,2,4,8,12,26] weeks to test consistency across start dates.
+ * V5 math (conviction weighting, 30-day cooldowns, T-Bill sweeps, slippage)
+ * plus Gemini Context Engine veto: scandal spikes are skipped; organic /
+ * positive demand proceeds. Exports AI bullish/bearish factors for fact-check.
  *
  * Run with:
- *   npm run simulate
- *   npx tsx --env-file=.env.local scripts/run-simulator.ts
+ *   npx tsx --env-file=.env.local scripts/run-simulator-ai.ts
  */
 
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { generateObject, generateText } from "ai";
 import * as fs from "fs";
 import path from "node:path";
 import YahooFinance from "yahoo-finance2";
+import { z } from "zod";
 
 import { normalizeDateString } from "../lib/chart-data";
 import { parentCompanies } from "../lib/entities";
@@ -25,12 +27,15 @@ import {
   extractBrandSeries,
   type TrendPoint,
 } from "../lib/screener";
+import { cleanLlmJsonText } from "../lib/sentiment-parse";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 const YEARS_BACK = 5;
+/** First year of history is reserved for YoY baseline; trade the last 4y. */
+const SIM_YEARS = 4;
 const SPX_TICKER = "^GSPC";
 const MA_WEEKS = 4;
 const YOY_LAG_WEEKS = 52;
@@ -46,18 +51,17 @@ const EARLY_EXIT_YOY_THRESHOLD = 0;
 /** Post-sell cooldown before re-buying the same brand (~4 weeks). */
 const COOLDOWN_WEEKS = 4;
 const COOLDOWN_DAYS = 30;
-/** Hard cap: a single trade never exceeds this fraction of total portfolio. */
-const MAX_POSITION_PCT = 0.2;
-/**
- * Opportunity-cost replacement: new trigger YoY must beat weakest held YoY
- * by at least this many percentage points (e.g. +40% vs +5% → gap 35).
- */
-const OPPORTUNITY_YOY_GAP = 15;
-/** Skip / replace only when deployable cash is below this fraction of the 20% slot. */
-const CASH_STARVED_FRACTION = 0.1;
+/** Hard cap: never put more than this fraction of portfolio into one name. */
+const MAX_POSITION_PCT = 0.3;
 /** Round-trip trading friction (applied on each buy and each sell). */
 const SLIPPAGE_RATE = 0.002;
 const YAHOO_PAUSE_MS = 500;
+/** Gemini context window pinned around each math trigger. */
+const AI_CONTEXT_LOOKBACK_DAYS = 14;
+const GOOGLE_API_KEY_ENV = "GOOGLE_GENERATIVE_AI_API_KEY";
+const GOOGLE_MODEL_IDS = ["gemini-2.5-flash", "gemini-2.5-pro"] as const;
+/** Polite pause between Gemini calls during the walk-forward. */
+const AI_PAUSE_MS = 400;
 
 const STARTING_CAPITAL = 10_000;
 /** Flat annual risk-free rate: Sharpe + idle T-Bill yield (weekly = / 52). */
@@ -65,6 +69,158 @@ const ANNUAL_RFR = 0.04;
 const WEEKLY_RFR = ANNUAL_RFR / 52;
 
 const yahooFinance = new YahooFinance();
+
+function sleep(ms: number) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+// ---------------------------------------------------------------------------
+// Gemini Context Engine (strict anti-hallucination)
+// ---------------------------------------------------------------------------
+
+export const AiCatalystSchema = z.object({
+  bullish_factor: z.string().min(1),
+  bearish_factor: z.string().min(1),
+  final_verdict: z.enum(["POSITIVE", "NEGATIVE", "NEUTRAL"]),
+  confidence: z.number().min(1).max(10),
+});
+
+export type AiCatalystVerdict = z.infer<typeof AiCatalystSchema>;
+
+const AI_FALLBACK_VERDICT: AiCatalystVerdict = {
+  bullish_factor: "None found",
+  bearish_factor: "None found",
+  final_verdict: "NEUTRAL",
+  confidence: 1,
+};
+
+function isModelNotFoundError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error);
+  const lower = message.toLowerCase();
+  return lower.includes("404") || lower.includes("not found");
+}
+
+function formatIsoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Exact [start, end] window ending on `asOfDate` (YYYY-MM-DD). */
+function aiDateWindow(
+  asOfDate: string,
+  lookbackDays: number = AI_CONTEXT_LOOKBACK_DAYS
+): { startDate: string; endDate: string } {
+  const end = new Date(`${normalizeDateString(asOfDate)}T12:00:00Z`);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - lookbackDays);
+  return { startDate: formatIsoDate(start), endDate: formatIsoDate(end) };
+}
+
+function buildAiSystemPrompt(
+  brand: string,
+  startDate: string,
+  endDate: string
+): string {
+  return `You are a highly skeptical Chief Investment Officer. I am giving you a specific 14-day window where search volume for a brand spiked. Use Google Search to find financial or product news strictly from that window. CRITICAL ANTI-HALLUCINATION RULE: Brands rarely have massive news. If you cannot find a major headline, do NOT fabricate one. It is highly likely the spike is just organic, 'boring' consumer demand for their clothes. If there is no specific news, return 'None found' and rate the verdict 'POSITIVE' (organic demand). ONLY rate the verdict 'NEGATIVE' if you find concrete proof of a brand-destroying scandal, boycott, or bankruptcy threat.
+
+Brand: '${brand}'
+Date window: ${startDate} to ${endDate}
+You MUST restrict your Google Search to news published strictly between ${startDate} and ${endDate}.
+
+Return a strict JSON object with exactly these four keys:
+- 'bullish_factor': strongest positive financial/product news in that window (or "None found")
+- 'bearish_factor': strongest negative news/scandal in that window (or "None found")
+- 'final_verdict': 'POSITIVE', 'NEGATIVE', or 'NEUTRAL'
+- 'confidence': number from 1 to 10`;
+}
+
+/**
+ * Gemini Search grounding for a math-triggered spike.
+ * Cached by brand + date window to avoid repeat calls in the walk-forward.
+ */
+const aiVerdictCache = new Map<string, AiCatalystVerdict>();
+
+async function analyzeSpikeWithAi(
+  brand: string,
+  asOfDate: string
+): Promise<AiCatalystVerdict> {
+  const { startDate, endDate } = aiDateWindow(asOfDate);
+  const cacheKey = `${brand}|${startDate}|${endDate}`;
+  const cached = aiVerdictCache.get(cacheKey);
+  if (cached) return cached;
+
+  const apiKey = process.env[GOOGLE_API_KEY_ENV];
+  if (!apiKey) {
+    console.warn(
+      `  [AI] Missing ${GOOGLE_API_KEY_ENV} — defaulting to NEUTRAL (no veto).`
+    );
+    aiVerdictCache.set(cacheKey, AI_FALLBACK_VERDICT);
+    return AI_FALLBACK_VERDICT;
+  }
+
+  const google = createGoogleGenerativeAI({ apiKey });
+  const prompt = buildAiSystemPrompt(brand, startDate, endDate);
+
+  console.log(
+    `  [AI] Investigating ${brand} spike ${startDate} → ${endDate}…`
+  );
+
+  for (const modelId of GOOGLE_MODEL_IDS) {
+    try {
+      // Prefer generateObject + schema. Gemini Search grounding may require
+      // generateText in this AI SDK — fall through on failure.
+      try {
+        const { object } = await generateObject({
+          model: google(modelId),
+          schema: AiCatalystSchema,
+          // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
+          tools: {
+            google_search: google.tools.googleSearch({}),
+          },
+          prompt,
+        });
+        aiVerdictCache.set(cacheKey, object);
+        await sleep(AI_PAUSE_MS);
+        return object;
+      } catch (objectError) {
+        console.warn(
+          `  [AI] generateObject ${modelId} failed, trying generateText:`,
+          objectError
+        );
+      }
+
+      const { text } = await generateText({
+        model: google(modelId),
+        tools: {
+          google_search: google.tools.googleSearch({}),
+        },
+        prompt,
+      });
+      const parsed = AiCatalystSchema.safeParse(
+        JSON.parse(cleanLlmJsonText(text ?? ""))
+      );
+      if (parsed.success) {
+        aiVerdictCache.set(cacheKey, parsed.data);
+        await sleep(AI_PAUSE_MS);
+        return parsed.data;
+      }
+      console.warn(`  [AI] Zod parse failed for ${modelId}:`, text);
+    } catch (error) {
+      console.warn(`  [AI] ${modelId} failed:`, error);
+      if (!isModelNotFoundError(error)) continue;
+    }
+  }
+
+  console.warn(
+    `  [AI] All models failed for ${brand} @ ${asOfDate} — defaulting to NEUTRAL.`
+  );
+  aiVerdictCache.set(cacheKey, AI_FALLBACK_VERDICT);
+  return AI_FALLBACK_VERDICT;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,13 +256,14 @@ interface OpenPosition {
   yoyGrowthPct: number;
   correlation: number;
   convictionScore: number;
+  /** Gemini Context Engine factors at entry (fact-check export). */
+  aiBullishFactor: string;
+  aiBearishFactor: string;
+  aiVerdict: AiCatalystVerdict["final_verdict"];
+  aiConfidence: number;
 }
 
-type ExitReason =
-  | "max_hold"
-  | "early_yoy"
-  | "forced_eod"
-  | "opportunity_replace";
+type ExitReason = "max_hold" | "early_yoy" | "forced_eod";
 
 interface ClosedTrade {
   ticker: string;
@@ -126,8 +283,8 @@ interface ClosedTrade {
   correlation: number;
   feesPaid: number;
   exitReason: ExitReason;
-  /** Present when exitReason === opportunity_replace. */
-  replacedByBrand?: string;
+  aiBullishFactor: string;
+  aiBearishFactor: string;
 }
 
 interface WeekTrigger {
@@ -350,10 +507,6 @@ function convictionScore(yoyGrowthPct: number, correlation: number): number {
   return correlation * yoyGrowthPct;
 }
 
-function sleep(ms: number) {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
 function pad(s: string, n: number) {
   return s.length >= n ? s.slice(0, n) : s + " ".repeat(n - s.length);
 }
@@ -449,9 +602,8 @@ function closePosition(input: {
   exitBar: WeeklyBar;
   spxBars: WeeklyBar[];
   exitReason: ExitReason;
-  replacedByBrand?: string;
 }): { trade: ClosedTrade; sellFee: number; netProceeds: number } {
-  const { pos, exitBar, spxBars, exitReason, replacedByBrand } = input;
+  const { pos, exitBar, spxBars, exitReason } = input;
   const grossProceeds = pos.shares * exitBar.close;
   const sellFee = grossProceeds * SLIPPAGE_RATE;
   const proceeds = grossProceeds - sellFee;
@@ -494,25 +646,10 @@ function closePosition(input: {
       correlation: pos.correlation,
       feesPaid,
       exitReason,
-      replacedByBrand,
+      aiBullishFactor: pos.aiBullishFactor,
+      aiBearishFactor: pos.aiBearishFactor,
     },
   };
-}
-
-function exitReasonLabel(t: ClosedTrade): string {
-  switch (t.exitReason) {
-    case "early_yoy":
-      return "Early YoY crash";
-    case "forced_eod":
-      return "Forced end-of-sim";
-    case "opportunity_replace":
-      return t.replacedByBrand
-        ? `Replaced by stronger signal (${t.replacedByBrand})`
-        : "Replaced by stronger signal";
-    case "max_hold":
-    default:
-      return "Max hold (90d)";
-  }
 }
 
 function csvEscape(value: string): string {
@@ -544,13 +681,12 @@ function exportUltimateReportCsv(
   outPath: string
 ): void {
   const lines: string[] = [
-    "=== TURBO FASHION INDEX: ULTIMATE SIMULATION REPORT ===",
+    "=== TURBO FASHION INDEX: AI-FILTERED SIMULATION REPORT ===",
     `Starting Capital:, ${fmtCsvUsd(summary.startingCapital)}`,
     `Final Portfolio Value:, ${fmtCsvUsd(summary.finalPortfolioValue)}`,
-    `V5 Hybrid Strategy Return:, ${fmtCsvPct(summary.strategyReturnPct)}`,
+    `V5+AI Strategy Return:, ${fmtCsvPct(summary.strategyReturnPct)}`,
     `S&P 500 Benchmark:, ${fmtCsvPct(summary.spxReturnPct)}`,
     `Alpha Generated:, ${fmtCsvPct(summary.alphaPct)}`,
-    `Max Position Size:, ${MAX_POSITION_PCT * 100}% of portfolio`,
     `Portfolio Beta:, ${
       summary.portfolioBeta != null && Number.isFinite(summary.portfolioBeta)
         ? summary.portfolioBeta.toFixed(2)
@@ -580,7 +716,8 @@ function exportUltimateReportCsv(
       "Return (%)",
       "Alpha (%)",
       "PnL ($)",
-      "Exit Reason",
+      "AI Bullish Factor",
+      "AI Bearish Factor",
     ].join(","),
   ];
 
@@ -600,7 +737,8 @@ function exportUltimateReportCsv(
         fmtCsvNumber(t.returnPct, 2),
         fmtCsvNumber(t.alphaPct, 2),
         fmtCsvNumber(t.pnl, 2),
-        csvEscape(exitReasonLabel(t)),
+        csvEscape(t.aiBullishFactor),
+        csvEscape(t.aiBearishFactor),
       ].join(",")
     );
 
@@ -608,443 +746,54 @@ function exportUltimateReportCsv(
 }
 
 /**
- * Live YoY search growth for an open position as of weekDate (null if N/A).
+ * Proportional conviction weights with a hard 30% portfolio cap per name.
+ * Leftover cash after capping is retained as a risk buffer.
  */
-function liveYoYForPosition(
-  pos: OpenPosition,
-  brands: BrandSeries[],
-  weekDate: string
-): number | null {
-  const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
-  if (!brandSeries) return null;
-  const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
-  if (idx == null) return null;
-  return yoyGrowthAt(brandSeries.series, idx);
-}
-
-/**
- * Hybrid Capital Allocation (Solution A):
- * Each new trade is sized to min(available cash, 20% of total portfolio value).
- * No full-cash sweep across triggers.
- */
-function sizeHybridAllocation(
+function allocateByConviction(
+  buyable: { signal: WeekTrigger; entryBar: WeeklyBar }[],
   cash: number,
   portfolioValue: number
-): number {
-  if (cash <= 0 || portfolioValue <= 0) return 0;
-  const maxAllocation = portfolioValue * MAX_POSITION_PCT;
-  const deployable = cash / (1 + SLIPPAGE_RATE);
-  return Math.min(maxAllocation, deployable);
-}
+): { signal: WeekTrigger; entryBar: WeeklyBar; allocation: number }[] {
+  if (buyable.length === 0 || cash <= 0 || portfolioValue <= 0) return [];
 
-function isCashStarved(cash: number, portfolioValue: number): boolean {
-  if (portfolioValue <= 0) return true;
-  const maxAllocation = portfolioValue * MAX_POSITION_PCT;
-  const deployable = cash / (1 + SLIPPAGE_RATE);
-  return deployable < Math.max(1, maxAllocation * CASH_STARVED_FRACTION);
+  const maxPerPos = MAX_POSITION_PCT * portfolioValue;
+  const scored = buyable.map((b) => ({
+    ...b,
+    score: Math.max(b.signal.convictionScore, 0),
+  }));
+  const totalScore = scored.reduce((s, b) => s + b.score, 0);
+  if (totalScore <= 0) return [];
+
+  // Highest conviction first so caps favor the best setups when cash is tight.
+  scored.sort((a, b) => b.score - a.score);
+
+  const out: { signal: WeekTrigger; entryBar: WeeklyBar; allocation: number }[] =
+    [];
+  let remainingCash = cash;
+
+  for (const item of scored) {
+    if (remainingCash < 1) break;
+    const raw = cash * (item.score / totalScore);
+    const allocation = Math.min(raw, maxPerPos, remainingCash);
+    if (allocation < 1) continue;
+    out.push({
+      signal: item.signal,
+      entryBar: item.entryBar,
+      allocation,
+    });
+    remainingCash -= allocation;
+  }
+
+  return out;
 }
 
 // ---------------------------------------------------------------------------
-// Single-run walk-forward (callable with a shifted start index)
-// ---------------------------------------------------------------------------
-
-interface SimulationHistory {
-  brands: BrandSeries[];
-  spxBars: WeeklyBar[];
-  stockBarsByTicker: Map<string, WeeklyBar[]>;
-}
-
-interface SimulationResult {
-  strategyReturn: number;
-  benchmarkReturn: number;
-  winRate: number;
-  beta: number | null;
-  sharpeAnn: number | null;
-  totalTrades: number;
-  startDate: string;
-  endDate: string;
-  finalPortfolioValue: number;
-  shiftWeeks: number;
-  closed: ClosedTrade[];
-  totalInterestEarned: number;
-  totalFeesPaid: number;
-  portfolioAlpha: number;
-}
-
-/**
- * Run one walk-forward from timeline[startIndex] → end.
- * startIndex typically = 52 + shift (1y YoY buffer + path-dependency offset).
- */
-async function runSimulation(
-  startIndex: number,
-  timeline: string[],
-  historicalData: SimulationHistory,
-  options: { quiet?: boolean; shiftWeeks?: number } = {}
-): Promise<SimulationResult> {
-  const { brands, spxBars, stockBarsByTicker } = historicalData;
-  const quiet = options.quiet ?? true;
-  const shiftWeeks = options.shiftWeeks ?? 0;
-
-  if (startIndex < 0 || startIndex >= timeline.length - HOLD_WEEKS - 2) {
-    throw new Error(
-      `Invalid startIndex ${startIndex} for timeline length ${timeline.length}.`
-    );
-  }
-
-  let cash = STARTING_CAPITAL;
-  const open: OpenPosition[] = [];
-  const closed: ClosedTrade[] = [];
-  let buysExecuted = 0;
-  let totalInterestEarned = 0;
-  let totalFeesPaid = 0;
-  const lastSoldDate: Record<string, string> = {};
-
-  const portfolioWeeklyReturns: number[] = [];
-  const marketWeeklyReturns: number[] = [];
-  let previousPortfolioValue: number | null = null;
-  let previousMarketValue: number | null = null;
-
-  for (let w = startIndex; w < timeline.length; w++) {
-    const weekDate = timeline[w];
-    const isLastWeek = w === timeline.length - 1;
-
-    const startPortfolioValue =
-      cash + markToMarket(open, stockBarsByTicker, weekDate);
-    const startSpxBar =
-      nearestOnOrBefore(spxBars, weekDate) ??
-      nearestOnOrAfter(spxBars, weekDate);
-    if (previousPortfolioValue == null && startPortfolioValue > 0) {
-      previousPortfolioValue = startPortfolioValue;
-    }
-    if (
-      previousMarketValue == null &&
-      startSpxBar != null &&
-      startSpxBar.close > 0
-    ) {
-      previousMarketValue = startSpxBar.close;
-    }
-
-    if (cash > 0) {
-      const interest = cash * WEEKLY_RFR;
-      cash += interest;
-      totalInterestEarned += interest;
-    }
-
-    for (let i = open.length - 1; i >= 0; i--) {
-      const pos = open[i];
-      const weeksHeld = w - pos.entryWeekIdx;
-      const maxHoldReached =
-        weeksHeld >= HOLD_WEEKS ||
-        daysBetween(pos.entryDate, weekDate) >= HOLD_DAYS;
-
-      let earlyYoYCrash = false;
-      if (
-        !maxHoldReached &&
-        !isLastWeek &&
-        weeksHeld >= MIN_HOLD_WEEKS_BEFORE_EARLY_EXIT
-      ) {
-        const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
-        if (brandSeries) {
-          const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
-          if (idx != null) {
-            const liveYoY = yoyGrowthAt(brandSeries.series, idx);
-            if (liveYoY != null && liveYoY < EARLY_EXIT_YOY_THRESHOLD) {
-              earlyYoYCrash = true;
-            }
-          }
-        }
-      }
-
-      const shouldSell = isLastWeek || maxHoldReached || earlyYoYCrash;
-      if (!shouldSell) continue;
-
-      const bars = stockBarsByTicker.get(pos.ticker);
-      if (!bars) continue;
-      const exitBar =
-        nearestOnOrBefore(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
-      if (!exitBar) continue;
-
-      const exitReason: ExitReason =
-        isLastWeek && !maxHoldReached && !earlyYoYCrash
-          ? "forced_eod"
-          : earlyYoYCrash
-            ? "early_yoy"
-            : "max_hold";
-
-      const { trade, sellFee, netProceeds } = closePosition({
-        pos,
-        exitBar,
-        spxBars,
-        exitReason,
-      });
-      cash += netProceeds;
-      totalFeesPaid += sellFee;
-      closed.push(trade);
-      lastSoldDate[pos.brand] = weekDate;
-      open.splice(i, 1);
-    }
-
-    if (!isLastWeek) {
-      const rawTriggers: WeekTrigger[] = [];
-      for (const b of brands) {
-        const idx = seriesIndexOnOrBefore(b, weekDate);
-        if (idx == null) continue;
-
-        const yoy = yoyGrowthAt(b.series, idx);
-        if (yoy == null || yoy <= YOY_GROWTH_THRESHOLD) continue;
-
-        const stockBars = stockBarsByTicker.get(b.ticker)!;
-        const corr = correlationAsOf(b.series, stockBars, weekDate);
-        if (!Number.isFinite(corr) || corr <= MIN_POSITIVE_CORR) continue;
-
-        const score = convictionScore(yoy, corr);
-        rawTriggers.push({
-          brand: b.brand,
-          parentName: b.parentName,
-          ticker: b.ticker,
-          date: b.series[idx].date,
-          yoyGrowthPct: yoy,
-          correlation: Math.round(corr * 100) / 100,
-          convictionScore: Math.round(score * 10) / 10,
-        });
-      }
-
-      const byTicker = new Map<string, WeekTrigger>();
-      for (const t of rawTriggers) {
-        const prev = byTicker.get(t.ticker);
-        if (!prev || t.convictionScore > prev.convictionScore) {
-          byTicker.set(t.ticker, t);
-        }
-      }
-
-      const candidates = [...byTicker.values()].sort(
-        (a, b) => b.convictionScore - a.convictionScore
-      );
-
-      const heldByTicker = new Map(open.map((p) => [p.ticker, p]));
-      const ordered = [...candidates].sort(
-        (a, b) =>
-          b.yoyGrowthPct - a.yoyGrowthPct ||
-          b.convictionScore - a.convictionScore
-      );
-
-      for (const signal of ordered) {
-        const held = heldByTicker.get(signal.ticker);
-        if (held) {
-          held.entryWeekIdx = w;
-          held.entryDate = weekDate;
-          held.yoyGrowthPct = signal.yoyGrowthPct;
-          held.correlation = signal.correlation;
-          held.convictionScore = signal.convictionScore;
-          if (held.brand !== signal.brand) {
-            held.brand = signal.brand;
-          }
-          continue;
-        }
-
-        const soldOn = lastSoldDate[signal.brand];
-        if (soldOn != null) {
-          const daysSinceSell = daysBetween(soldOn, weekDate);
-          if (daysSinceSell <= COOLDOWN_DAYS) continue;
-        }
-
-        const bars = stockBarsByTicker.get(signal.ticker);
-        if (!bars) continue;
-        const entryBar =
-          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
-        if (!entryBar || entryBar.close <= 0) continue;
-
-        let portfolioValue =
-          cash + markToMarket(open, stockBarsByTicker, weekDate);
-
-        if (isCashStarved(cash, portfolioValue) && open.length > 0) {
-          let weakestIdx = -1;
-          let weakestYoY = Number.POSITIVE_INFINITY;
-          for (let oi = 0; oi < open.length; oi++) {
-            const pos = open[oi];
-            if (pos.ticker === signal.ticker) continue;
-            const live = liveYoYForPosition(pos, brands, weekDate);
-            const yoy = live ?? pos.yoyGrowthPct;
-            if (yoy < weakestYoY) {
-              weakestYoY = yoy;
-              weakestIdx = oi;
-            }
-          }
-
-          if (
-            weakestIdx >= 0 &&
-            Number.isFinite(weakestYoY) &&
-            signal.yoyGrowthPct - weakestYoY >= OPPORTUNITY_YOY_GAP
-          ) {
-            const weakPos = open[weakestIdx];
-            const weakBars = stockBarsByTicker.get(weakPos.ticker);
-            const weakExit =
-              weakBars != null
-                ? nearestOnOrBefore(weakBars, weekDate) ??
-                  nearestOnOrAfter(weakBars, weekDate)
-                : null;
-            if (weakExit) {
-              const { trade, sellFee, netProceeds } = closePosition({
-                pos: weakPos,
-                exitBar: weakExit,
-                spxBars,
-                exitReason: "opportunity_replace",
-                replacedByBrand: signal.brand,
-              });
-              cash += netProceeds;
-              totalFeesPaid += sellFee;
-              closed.push(trade);
-              lastSoldDate[weakPos.brand] = weekDate;
-              open.splice(weakestIdx, 1);
-              heldByTicker.delete(weakPos.ticker);
-              if (!quiet) {
-                console.log(
-                  `  [REPLACE] Sold ${weakPos.brand} (YoY ${fmtPct(weakestYoY)}) → buy ${signal.brand} (YoY ${fmtPct(signal.yoyGrowthPct)})  (Replaced by stronger signal)`
-                );
-              }
-              portfolioValue =
-                cash + markToMarket(open, stockBarsByTicker, weekDate);
-            }
-          }
-        }
-
-        const allocation = sizeHybridAllocation(cash, portfolioValue);
-        if (allocation < 1) continue;
-
-        const buyFee = allocation * SLIPPAGE_RATE;
-        const totalDebit = allocation + buyFee;
-        if (totalDebit > cash + 1e-9) continue;
-
-        const shares = allocation / entryBar.close;
-        cash -= totalDebit;
-        totalFeesPaid += buyFee;
-        open.push({
-          ticker: signal.ticker,
-          brand: signal.brand,
-          parentName: signal.parentName,
-          originalEntryDate: entryBar.date,
-          entryDate: entryBar.date,
-          entryWeekIdx: w,
-          entryPrice: entryBar.close,
-          shares,
-          cost: allocation,
-          buyFee,
-          yoyGrowthPct: signal.yoyGrowthPct,
-          correlation: signal.correlation,
-          convictionScore: signal.convictionScore,
-        });
-        heldByTicker.set(signal.ticker, open[open.length - 1]);
-        buysExecuted += 1;
-        if (!quiet) {
-          console.log(
-            `  [BUY] ${signal.brand} (${signal.ticker})  size ${fmtUsd(allocation)}  (${((allocation / portfolioValue) * 100).toFixed(1)}% of portfolio)  YoY ${fmtPct(signal.yoyGrowthPct)}`
-          );
-        }
-      }
-    }
-
-    const endPortfolioValue =
-      cash + markToMarket(open, stockBarsByTicker, weekDate);
-    const endSpxBar =
-      nearestOnOrBefore(spxBars, weekDate) ??
-      nearestOnOrAfter(spxBars, weekDate);
-
-    if (
-      previousPortfolioValue != null &&
-      previousPortfolioValue > 0 &&
-      Number.isFinite(endPortfolioValue)
-    ) {
-      portfolioWeeklyReturns.push(
-        (endPortfolioValue - previousPortfolioValue) / previousPortfolioValue
-      );
-      previousPortfolioValue = endPortfolioValue;
-    }
-
-    if (
-      previousMarketValue != null &&
-      previousMarketValue > 0 &&
-      endSpxBar != null &&
-      Number.isFinite(endSpxBar.close) &&
-      endSpxBar.close > 0
-    ) {
-      marketWeeklyReturns.push(
-        (endSpxBar.close - previousMarketValue) / previousMarketValue
-      );
-      previousMarketValue = endSpxBar.close;
-    }
-  }
-
-  if (open.length > 0) {
-    const lastDate = timeline[timeline.length - 1];
-    for (const pos of open) {
-      const bars = stockBarsByTicker.get(pos.ticker);
-      const exitBar = bars
-        ? nearestOnOrBefore(bars, lastDate) ?? bars[bars.length - 1]
-        : null;
-      if (!exitBar) continue;
-      const { trade, sellFee, netProceeds } = closePosition({
-        pos,
-        exitBar,
-        spxBars,
-        exitReason: "forced_eod",
-      });
-      cash += netProceeds;
-      totalFeesPaid += sellFee;
-      closed.push(trade);
-      lastSoldDate[pos.brand] = lastDate;
-    }
-    open.length = 0;
-  }
-
-  const finalValue = cash;
-  const strategyReturn = pctReturn(STARTING_CAPITAL, finalValue);
-  const startDate = timeline[startIndex];
-  const endDate = timeline[timeline.length - 1];
-  const spxStart = nearestOnOrAfter(spxBars, startDate);
-  const spxEnd = nearestOnOrBefore(spxBars, endDate);
-  const benchmarkReturn =
-    spxStart && spxEnd ? pctReturn(spxStart.close, spxEnd.close) : NaN;
-  const portfolioAlpha =
-    Number.isFinite(strategyReturn) && Number.isFinite(benchmarkReturn)
-      ? strategyReturn - benchmarkReturn
-      : NaN;
-
-  const wins = closed.filter((t) => t.pnl > 0).length;
-  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
-  const beta = calculateBeta(portfolioWeeklyReturns, marketWeeklyReturns);
-  const sharpeAnn = calculateAnnualizedSharpe(portfolioWeeklyReturns);
-
-  return {
-    strategyReturn,
-    benchmarkReturn,
-    winRate,
-    beta,
-    sharpeAnn,
-    totalTrades: buysExecuted,
-    startDate,
-    endDate,
-    finalPortfolioValue: finalValue,
-    shiftWeeks,
-    closed,
-    totalInterestEarned,
-    totalFeesPaid,
-    portfolioAlpha,
-  };
-}
-
-function avgFinite(values: number[]): number | null {
-  const xs = values.filter((v) => Number.isFinite(v));
-  if (xs.length === 0) return null;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
-
-// ---------------------------------------------------------------------------
-// Batch runner: rolling-window path-dependency test
+// Main walk-forward loop
 // ---------------------------------------------------------------------------
 
 async function main() {
   console.log("\n╔══════════════════════════════════════════════════════════╗");
-  console.log("║  V5 Hybrid Simulator — Rolling Window Path Dependency    ║");
+  console.log("║  AI-Filtered Walk-Forward Simulator (V5 + Gemini)        ║");
   console.log("╚══════════════════════════════════════════════════════════╝\n");
 
   const brandNames = [
@@ -1054,16 +803,25 @@ async function main() {
     `Universe: ${parentCompanies.length} parents · ${brandNames.length} child brands`
   );
   console.log(
-    `Capital: ${fmtUsd(STARTING_CAPITAL)} · Sizing: hybrid · max ${MAX_POSITION_PCT * 100}% / name`
+    `Capital: ${fmtUsd(STARTING_CAPITAL)} · Sizing: conviction (r × YoY) · max ${MAX_POSITION_PCT * 100}% / name`
   );
   console.log(
-    `Entry: YoY > ${YOY_GROWTH_THRESHOLD}% · r > ${MIN_POSITIVE_CORR}`
+    `Entry: YoY > ${YOY_GROWTH_THRESHOLD}% · r > ${MIN_POSITIVE_CORR} · then Gemini ${AI_CONTEXT_LOOKBACK_DAYS}d veto`
   );
   console.log(
-    `Exit: early YoY < ${EARLY_EXIT_YOY_THRESHOLD}% · max ${HOLD_DAYS}d · opportunity gap ${OPPORTUNITY_YOY_GAP}pp`
+    `Exit: early if YoY < ${EARLY_EXIT_YOY_THRESHOLD}% after ${MIN_HOLD_WEEKS_BEFORE_EARLY_EXIT}w · else max ${HOLD_DAYS}d (~${HOLD_WEEKS}w)`
   );
   console.log(
-    `Cooldown: ${COOLDOWN_DAYS}d · T-Bill ${ANNUAL_RFR * 100}% · Slippage ${SLIPPAGE_RATE * 100}%/side\n`
+    `Cooldown: no re-buy of same brand for ${COOLDOWN_DAYS}d (~${COOLDOWN_WEEKS}w) after sell`
+  );
+  console.log(
+    `Idle cash: ${ANNUAL_RFR * 100}% T-Bill · Friction: ${SLIPPAGE_RATE * 100}% per side · Rolling Catalyst: re-trigger extends hold`
+  );
+  console.log(
+    `AI: NEGATIVE = scandal veto · POSITIVE/NEUTRAL = allow buy (organic demand OK)`
+  );
+  console.log(
+    `Window: last ${SIM_YEARS}y of trading (first year reserved for YoY baseline)\n`
   );
 
   console.log("Fetching 5y Google Trends from Supabase…");
@@ -1133,115 +891,455 @@ async function main() {
     throw new Error("No brand series available for simulation.");
   }
 
-  // Full YEARS_BACK timeline so startIndex = 52 + shift still leaves multi-year runs.
   const today = new Date().toISOString().slice(0, 10);
-  const dataStartDate = new Date();
-  dataStartDate.setFullYear(dataStartDate.getFullYear() - YEARS_BACK);
-  const dataStart = dataStartDate.toISOString().slice(0, 10);
+  const simStartDate = new Date();
+  simStartDate.setFullYear(simStartDate.getFullYear() - SIM_YEARS);
+  const simStart = simStartDate.toISOString().slice(0, 10);
 
   const allTrendDates = brands.flatMap((b) => b.series.map((p) => p.date));
-  const timeline = buildTimeline(spxBars, allTrendDates, dataStart).filter(
+  const timeline = buildTimeline(spxBars, allTrendDates, simStart).filter(
     (d) => d <= today
   );
 
-  if (timeline.length < YOY_LAG_WEEKS + HOLD_WEEKS + 30) {
+  if (timeline.length < HOLD_WEEKS + 2) {
     throw new Error(
       `Timeline too short (${timeline.length} weeks). Need more historical data.`
     );
   }
 
-  const historicalData: SimulationHistory = {
-    brands,
-    spxBars,
-    stockBarsByTicker,
-  };
-
-  /** Weekly start-date shifts for path-dependency stress test. */
-  const shifts = [0, 1, 2, 4, 8, 12, 26];
-  const results: SimulationResult[] = [];
-
   console.log(
-    `\nTimeline: ${timeline[0]} → ${timeline[timeline.length - 1]} (${timeline.length} weeks)`
+    `\nWalk-forward: ${timeline[0]} → ${timeline[timeline.length - 1]} (${timeline.length} weeks)\n`
   );
-  console.log(
-    `Rolling windows: startIndex = 52 + shift  for shifts [${shifts.join(", ")}]\n`
-  );
-  console.log("Running batch…\n");
 
-  for (const shift of shifts) {
-    const startIndex = 52 + shift;
-    process.stdout.write(
-      `  Shift +${String(shift).padStart(2, " ")}w (idx ${startIndex})… `
-    );
-    const result = await runSimulation(startIndex, timeline, historicalData, {
-      quiet: true,
-      shiftWeeks: shift,
-    });
-    results.push(result);
-    console.log(
-      `${result.startDate} → ${fmtPct(result.strategyReturn)}  (${result.totalTrades} trades)`
-    );
+  let cash = STARTING_CAPITAL;
+  const open: OpenPosition[] = [];
+  const closed: ClosedTrade[] = [];
+  let buysExecuted = 0;
+  let earlyExits = 0;
+  let catalystExtensions = 0;
+  let aiVetos = 0;
+  let aiInvestigations = 0;
+  let totalInterestEarned = 0;
+  let totalFeesPaid = 0;
+  /** Child brand → last sell date (blocks re-entry for cooldown window). */
+  const lastSoldDate: Record<string, string> = {};
+
+  const portfolioWeeklyReturns: number[] = [];
+  const marketWeeklyReturns: number[] = [];
+  let previousPortfolioValue: number | null = null;
+  let previousMarketValue: number | null = null;
+
+  for (let w = 0; w < timeline.length; w++) {
+    const weekDate = timeline[w];
+    const isLastWeek = w === timeline.length - 1;
+
+    // ------------------------------------------------------------------
+    // START OF WEEK: seed previous values for WoW return tracking
+    // ------------------------------------------------------------------
+    const startPortfolioValue =
+      cash + markToMarket(open, stockBarsByTicker, weekDate);
+    const startSpxBar =
+      nearestOnOrBefore(spxBars, weekDate) ??
+      nearestOnOrAfter(spxBars, weekDate);
+    if (previousPortfolioValue == null && startPortfolioValue > 0) {
+      previousPortfolioValue = startPortfolioValue;
+    }
+    if (
+      previousMarketValue == null &&
+      startSpxBar != null &&
+      startSpxBar.close > 0
+    ) {
+      previousMarketValue = startSpxBar.close;
+    }
+
+    // ------------------------------------------------------------------
+    // IDLE CASH: accrue weekly T-Bill yield (ANNUAL_RFR / 52)
+    // ------------------------------------------------------------------
+    if (cash > 0) {
+      const interest = cash * WEEKLY_RFR;
+      cash += interest;
+      totalInterestEarned += interest;
+    }
+
+    // ------------------------------------------------------------------
+    // SELL: max hold (13w / 90d) OR early YoY crash after ≥ 3 weeks
+    // ------------------------------------------------------------------
+    for (let i = open.length - 1; i >= 0; i--) {
+      const pos = open[i];
+      const weeksHeld = w - pos.entryWeekIdx;
+      const maxHoldReached =
+        weeksHeld >= HOLD_WEEKS ||
+        daysBetween(pos.entryDate, weekDate) >= HOLD_DAYS;
+
+      let earlyYoYCrash = false;
+      if (
+        !maxHoldReached &&
+        !isLastWeek &&
+        weeksHeld >= MIN_HOLD_WEEKS_BEFORE_EARLY_EXIT
+      ) {
+        const brandSeries = findBrandSeries(brands, pos.brand, pos.ticker);
+        if (brandSeries) {
+          const idx = seriesIndexOnOrBefore(brandSeries, weekDate);
+          if (idx != null) {
+            const liveYoY = yoyGrowthAt(brandSeries.series, idx);
+            if (liveYoY != null && liveYoY < EARLY_EXIT_YOY_THRESHOLD) {
+              earlyYoYCrash = true;
+            }
+          }
+        }
+      }
+
+      const shouldSell = isLastWeek || maxHoldReached || earlyYoYCrash;
+      if (!shouldSell) continue;
+
+      const bars = stockBarsByTicker.get(pos.ticker);
+      if (!bars) continue;
+      const exitBar =
+        nearestOnOrBefore(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
+      if (!exitBar) continue;
+
+      const exitReason: ExitReason = isLastWeek && !maxHoldReached && !earlyYoYCrash
+        ? "forced_eod"
+        : earlyYoYCrash
+          ? "early_yoy"
+          : "max_hold";
+
+      const { trade, sellFee, netProceeds } = closePosition({
+        pos,
+        exitBar,
+        spxBars,
+        exitReason,
+      });
+      cash += netProceeds;
+      totalFeesPaid += sellFee;
+      closed.push(trade);
+      lastSoldDate[pos.brand] = weekDate;
+      if (exitReason === "early_yoy") earlyExits += 1;
+      open.splice(i, 1);
+    }
+
+    if (!isLastWeek) {
+      // ------------------------------------------------------------------
+      // SCAN → BUY funnel: Math → Held → Cooldown → Capital → AI Bouncer
+      // Gemini is only called when a BUY is about to execute.
+      // ------------------------------------------------------------------
+      const rawTriggers: WeekTrigger[] = [];
+      for (const b of brands) {
+        const idx = seriesIndexOnOrBefore(b, weekDate);
+        if (idx == null) continue;
+
+        // Step A: Math gate
+        const yoyGrowth = yoyGrowthAt(b.series, idx);
+        const stockBars = stockBarsByTicker.get(b.ticker)!;
+        const correlation = correlationAsOf(b.series, stockBars, weekDate);
+        if (
+          yoyGrowth == null ||
+          yoyGrowth < YOY_GROWTH_THRESHOLD ||
+          !Number.isFinite(correlation) ||
+          correlation < MIN_POSITIVE_CORR
+        ) {
+          continue;
+        }
+
+        const score = convictionScore(yoyGrowth, correlation);
+        rawTriggers.push({
+          brand: b.brand,
+          parentName: b.parentName,
+          ticker: b.ticker,
+          date: b.series[idx].date,
+          yoyGrowthPct: yoyGrowth,
+          correlation: Math.round(correlation * 100) / 100,
+          convictionScore: Math.round(score * 10) / 10,
+        });
+      }
+
+      // One signal per ticker: keep highest conviction if multiple brands fire.
+      const byTicker = new Map<string, WeekTrigger>();
+      for (const t of rawTriggers) {
+        const prev = byTicker.get(t.ticker);
+        if (!prev || t.convictionScore > prev.convictionScore) {
+          byTicker.set(t.ticker, t);
+        }
+      }
+
+      const candidates = [...byTicker.values()].sort(
+        (a, b) => b.convictionScore - a.convictionScore
+      );
+
+      const heldByTicker = new Map(open.map((p) => [p.ticker, p]));
+      const buyable: { signal: WeekTrigger; entryBar: WeeklyBar }[] = [];
+
+      for (const signal of candidates) {
+        // Step B: already held → Rolling Catalyst only (no AI, no new buy)
+        const held = heldByTicker.get(signal.ticker);
+        if (held) {
+          held.entryWeekIdx = w;
+          held.entryDate = weekDate;
+          held.yoyGrowthPct = signal.yoyGrowthPct;
+          held.correlation = signal.correlation;
+          held.convictionScore = signal.convictionScore;
+          if (held.brand !== signal.brand) {
+            held.brand = signal.brand;
+          }
+          catalystExtensions += 1;
+          continue;
+        }
+
+        // Step C: post-sale cooldown
+        const soldOn = lastSoldDate[signal.brand];
+        if (soldOn != null) {
+          const daysSinceSell = daysBetween(soldOn, weekDate);
+          if (daysSinceSell <= COOLDOWN_DAYS) continue;
+        }
+
+        const bars = stockBarsByTicker.get(signal.ticker);
+        if (!bars) continue;
+        const entryBar =
+          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
+        if (!entryBar || entryBar.close <= 0) continue;
+        buyable.push({ signal, entryBar });
+      }
+
+      if (buyable.length > 0 && cash > 0) {
+        const portfolioValue =
+          cash + markToMarket(open, stockBarsByTicker, weekDate);
+        // Step D: capital / conviction sizing (who is actually fundable)
+        const deployable = cash / (1 + SLIPPAGE_RATE);
+        const allocations = allocateByConviction(
+          buyable,
+          deployable,
+          portfolioValue
+        );
+
+        for (const { signal, entryBar, allocation } of allocations) {
+          const buyFee = allocation * SLIPPAGE_RATE;
+          const totalDebit = allocation + buyFee;
+          if (totalDebit > cash + 1e-9) continue;
+
+          // Step E: AI Bouncer — only when we are about to BUY
+          aiInvestigations += 1;
+          const ai = await analyzeSpikeWithAi(signal.brand, signal.date);
+          if (ai.final_verdict === "NEGATIVE") {
+            aiVetos += 1;
+            console.log(
+              `  [AI VETO] Skipping BUY ${signal.brand} (${signal.ticker}) @ ${signal.date} — scandal: ${ai.bearish_factor}`
+            );
+            continue;
+          }
+
+          const shares = allocation / entryBar.close;
+          cash -= totalDebit;
+          totalFeesPaid += buyFee;
+          open.push({
+            ticker: signal.ticker,
+            brand: signal.brand,
+            parentName: signal.parentName,
+            originalEntryDate: entryBar.date,
+            entryDate: entryBar.date,
+            entryWeekIdx: w,
+            entryPrice: entryBar.close,
+            shares,
+            cost: allocation,
+            buyFee,
+            yoyGrowthPct: signal.yoyGrowthPct,
+            correlation: signal.correlation,
+            convictionScore: signal.convictionScore,
+            aiBullishFactor: ai.bullish_factor,
+            aiBearishFactor: ai.bearish_factor,
+            aiVerdict: ai.final_verdict,
+            aiConfidence: ai.confidence,
+          });
+          heldByTicker.set(signal.ticker, open[open.length - 1]);
+          buysExecuted += 1;
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // END OF WEEK: WoW % change → weekly return series (decimal)
+    // ------------------------------------------------------------------
+    const endPortfolioValue =
+      cash + markToMarket(open, stockBarsByTicker, weekDate);
+    const endSpxBar =
+      nearestOnOrBefore(spxBars, weekDate) ??
+      nearestOnOrAfter(spxBars, weekDate);
+
+    if (
+      previousPortfolioValue != null &&
+      previousPortfolioValue > 0 &&
+      Number.isFinite(endPortfolioValue)
+    ) {
+      portfolioWeeklyReturns.push(
+        (endPortfolioValue - previousPortfolioValue) / previousPortfolioValue
+      );
+      previousPortfolioValue = endPortfolioValue;
+    }
+
+    if (
+      previousMarketValue != null &&
+      previousMarketValue > 0 &&
+      endSpxBar != null &&
+      Number.isFinite(endSpxBar.close) &&
+      endSpxBar.close > 0
+    ) {
+      marketWeeklyReturns.push(
+        (endSpxBar.close - previousMarketValue) / previousMarketValue
+      );
+      previousMarketValue = endSpxBar.close;
+    }
   }
 
-  console.log("\n┌─────────────────────────────────────────────────────────────────────────────┐");
-  console.log("│  Rolling Window Results (Hybrid Capital Allocation)                         │");
-  console.log("├─────────────────────────────────────────────────────────────────────────────┤");
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const betaStr =
-      r.beta != null && Number.isFinite(r.beta) ? r.beta.toFixed(2) : "n/a";
-    const line = `Run ${i + 1} (Start: ${r.startDate}, +${r.shiftWeeks}w): ${fmtPct(r.strategyReturn)} Ret | ${fmtPct(r.benchmarkReturn)} SPX | ${r.winRate.toFixed(1)}% WR | ${betaStr} Beta | ${r.totalTrades} trades`;
-    console.log(`│  ${pad(line, 75)}│`);
+  // Safety: any leftover open positions
+  if (open.length > 0) {
+    const lastDate = timeline[timeline.length - 1];
+    for (const pos of open) {
+      const bars = stockBarsByTicker.get(pos.ticker);
+      const exitBar = bars
+        ? nearestOnOrBefore(bars, lastDate) ?? bars[bars.length - 1]
+        : null;
+      if (!exitBar) continue;
+      const { trade, sellFee, netProceeds } = closePosition({
+        pos,
+        exitBar,
+        spxBars,
+        exitReason: "forced_eod",
+      });
+      cash += netProceeds;
+      totalFeesPaid += sellFee;
+      closed.push(trade);
+      lastSoldDate[pos.brand] = lastDate;
+    }
+    open.length = 0;
   }
-  console.log("└─────────────────────────────────────────────────────────────────────────────┘\n");
 
-  const avgStrategy = avgFinite(results.map((r) => r.strategyReturn));
-  const avgBenchmark = avgFinite(results.map((r) => r.benchmarkReturn));
-  const avgWinRate = avgFinite(results.map((r) => r.winRate));
-  const avgBeta = avgFinite(
-    results.map((r) => r.beta).filter((b): b is number => b != null)
-  );
+  const finalValue = cash;
+  const strategyReturnPct = pctReturn(STARTING_CAPITAL, finalValue);
 
-  console.log("Averages across all rolling windows:");
-  console.log(
-    `  Average Strategy Return   ${avgStrategy != null ? fmtPct(avgStrategy) : "n/a"}`
-  );
-  console.log(
-    `  Average Benchmark Return  ${avgBenchmark != null ? fmtPct(avgBenchmark) : "n/a"}`
-  );
-  console.log(
-    `  Average Win Rate          ${avgWinRate != null ? `${avgWinRate.toFixed(1)}%` : "n/a"}`
-  );
-  console.log(
-    `  Average Beta              ${avgBeta != null ? avgBeta.toFixed(2) : "n/a"}`
-  );
-  console.log("");
+  const simEnd = timeline[timeline.length - 1];
+  const spxStart = nearestOnOrAfter(spxBars, timeline[0]);
+  const spxEnd = nearestOnOrBefore(spxBars, simEnd);
+  const spxReturnPct =
+    spxStart && spxEnd ? pctReturn(spxStart.close, spxEnd.close) : NaN;
+  const portfolioAlphaPct =
+    Number.isFinite(strategyReturnPct) && Number.isFinite(spxReturnPct)
+      ? strategyReturnPct - spxReturnPct
+      : NaN;
 
-  // Export CSV for the baseline window (shift 0) for trade-level fact-checking.
-  const baseline = results[0];
-  if (baseline) {
-    const tradeLogPath = path.join(process.cwd(), "simulator_trades.csv");
-    exportUltimateReportCsv(
-      baseline.closed,
-      {
-        startingCapital: STARTING_CAPITAL,
-        finalPortfolioValue: baseline.finalPortfolioValue,
-        strategyReturnPct: baseline.strategyReturn,
-        spxReturnPct: baseline.benchmarkReturn,
-        alphaPct: baseline.portfolioAlpha,
-        portfolioBeta: baseline.beta,
-        sharpeAnn: baseline.sharpeAnn,
-        totalTrades: baseline.totalTrades,
-        winRatePct: baseline.winRate,
-        totalInterestEarned: baseline.totalInterestEarned,
-        totalFeesPaid: baseline.totalFeesPaid,
-      },
-      tradeLogPath
-    );
-    console.log(
-      "📊 Baseline (shift +0w) trade log exported to simulator_trades.csv"
-    );
+  const wins = closed.filter((t) => t.pnl > 0).length;
+  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+
+  const alphas = closed
+    .map((t) => t.alphaPct)
+    .filter((a) => Number.isFinite(a));
+  const avgTradeAlpha =
+    alphas.length > 0
+      ? alphas.reduce((s, a) => s + a, 0) / alphas.length
+      : NaN;
+
+  const portfolioBeta = calculateBeta(
+    portfolioWeeklyReturns,
+    marketWeeklyReturns
+  );
+  const sharpeAnn = calculateAnnualizedSharpe(portfolioWeeklyReturns);
+
+  console.log("┌──────────────────────────────────────────────────────────┐");
+  console.log("│  AI-Filtered Walk-Forward Simulator (V5 + Gemini)        │");
+  console.log("├──────────────────────────────────────────────────────────┤");
+  console.log(
+    `│  Starting Capital            ${pad(fmtUsd(STARTING_CAPITAL), 26)}│`
+  );
+  console.log(
+    `│  Final Portfolio Value       ${pad(fmtUsd(finalValue), 26)}│`
+  );
+  console.log(
+    `│  AI-Filtered Strategy Ret    ${pad(fmtPct(strategyReturnPct), 26)}│`
+  );
+  console.log(
+    `│  S&P 500 Total Return        ${pad(fmtPct(spxReturnPct), 26)}│`
+  );
+  console.log(
+    `│  Total Trades Executed       ${pad(String(buysExecuted), 26)}│`
+  );
+  console.log(
+    `│  Portfolio Win Rate          ${pad(`${winRate.toFixed(1)}%  (${wins}/${closed.length})`, 26)}│`
+  );
+  console.log(
+    `│  Average Trade Alpha         ${pad(fmtPct(avgTradeAlpha), 26)}│`
+  );
+  console.log(
+    `│  Portfolio Beta              ${pad(fmtRatio(portfolioBeta, 2), 26)}│`
+  );
+  console.log(
+    `│  Sharpe Ratio (Ann.)         ${pad(fmtRatio(sharpeAnn, 2), 26)}│`
+  );
+  console.log(
+    `│  T-Bill Interest Earned      ${pad(fmtUsd(totalInterestEarned), 26)}│`
+  );
+  console.log(
+    `│  Trading Friction (Fees)     ${pad(fmtUsd(totalFeesPaid), 26)}│`
+  );
+  console.log("├──────────────────────────────────────────────────────────┤");
+  console.log(
+    `│  Period                      ${pad(`${timeline[0]} → ${simEnd}`, 26)}│`
+  );
+  console.log(
+    `│  Early YoY Exits             ${pad(String(earlyExits), 26)}│`
+  );
+  console.log(
+    `│  Rolling Catalyst Ext.       ${pad(String(catalystExtensions), 26)}│`
+  );
+  console.log(
+    `│  AI Investigations           ${pad(String(aiInvestigations), 26)}│`
+  );
+  console.log(
+    `│  AI Scandal Vetos            ${pad(String(aiVetos), 26)}│`
+  );
+  console.log(
+    `│  vs Benchmark (portfolio α)  ${pad(
+      Number.isFinite(portfolioAlphaPct) ? fmtPct(portfolioAlphaPct) : "n/a",
+      26
+    )}│`
+  );
+  console.log("└──────────────────────────────────────────────────────────┘\n");
+
+  const sample = [...closed]
+    .sort((a, b) => b.exitDate.localeCompare(a.exitDate))
+    .slice(0, 8);
+  if (sample.length > 0) {
+    console.log("Recent closed trades:");
+    for (const t of sample) {
+      const tag =
+        t.exitReason === "early_yoy"
+          ? " (early YoY)"
+          : t.exitReason === "forced_eod"
+            ? " (forced)"
+            : "";
+      console.log(
+        `  ${t.entryDate}→${t.exitDate}  ${t.ticker.padEnd(6)} ${pad(t.brand, 16)} ${fmtPct(t.returnPct)}  α ${fmtPct(t.alphaPct)}  PnL ${fmtUsd(t.pnl)}${tag}`
+      );
+    }
+    console.log("");
   }
+
+  const tradeLogPath = path.join(process.cwd(), "simulator_ai_trades.csv");
+  exportUltimateReportCsv(
+    closed,
+    {
+      startingCapital: STARTING_CAPITAL,
+      finalPortfolioValue: finalValue,
+      strategyReturnPct,
+      spxReturnPct,
+      alphaPct: portfolioAlphaPct,
+      portfolioBeta,
+      sharpeAnn,
+      totalTrades: buysExecuted,
+      winRatePct: winRate,
+      totalInterestEarned,
+      totalFeesPaid,
+    },
+    tradeLogPath
+  );
+  console.log("📊 Full trade log exported to simulator_ai_trades.csv");
 }
 
 main()

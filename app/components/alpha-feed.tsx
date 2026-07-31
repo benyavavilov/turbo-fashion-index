@@ -12,62 +12,62 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-import type { AlphaFeedCard } from "@/lib/ai-insights";
-import { isBearishVerdict, isBullishVerdict } from "@/lib/paper-portfolio";
+import type { AlphaFeedCard, EarningsMismatch } from "@/lib/ai-insights";
+import {
+  formatExpectedRevenueGrowth,
+  formatSearchGrowthPct,
+  mismatchToAlertBadge,
+} from "@/lib/ai-insights";
 
-function directionAccent(card: AlphaFeedCard) {
-  if (card.direction === "UP" || card.kind === "PROJECTED UP") {
+function alertAccent(mismatch: EarningsMismatch) {
+  if (mismatch === "BEAT_LIKELY") {
     return {
-      card: "border-emerald-500/35 bg-gradient-to-b from-emerald-500/15 via-neutral-950 to-neutral-950 hover:border-emerald-400/55",
-      badge: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/35",
-      hero: "text-emerald-100/90",
+      card: "border-emerald-500/40 bg-gradient-to-b from-emerald-500/15 via-neutral-950 to-neutral-950 hover:border-emerald-400/60",
+      badge:
+        "border-emerald-400/50 bg-emerald-500/20 text-emerald-200 shadow-[0_0_20px_rgba(16,185,129,0.18)]",
+      iconWrap: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/40",
+      delta: "border-emerald-500/20 bg-emerald-500/[0.06]",
       Icon: TrendingUp,
     };
   }
-  if (card.direction === "DOWN" || card.kind === "PROJECTED DOWN") {
+  if (mismatch === "MISS_LIKELY") {
     return {
-      card: "border-rose-500/35 bg-gradient-to-b from-rose-500/15 via-neutral-950 to-neutral-950 hover:border-rose-400/55",
-      badge: "bg-rose-500/15 text-rose-300 ring-rose-500/35",
-      hero: "text-rose-100/90",
+      card: "border-rose-500/40 bg-gradient-to-b from-rose-500/15 via-neutral-950 to-neutral-950 hover:border-rose-400/60",
+      badge:
+        "border-rose-400/50 bg-rose-500/20 text-rose-200 shadow-[0_0_20px_rgba(244,63,94,0.18)]",
+      iconWrap: "bg-rose-500/15 text-rose-300 ring-rose-500/40",
+      delta: "border-rose-500/20 bg-rose-500/[0.06]",
       Icon: TrendingDown,
     };
   }
   return {
-    card: "border-amber-500/30 bg-gradient-to-b from-sky-500/10 via-amber-500/8 to-neutral-950 hover:border-amber-400/45",
-    badge: "bg-sky-500/15 text-sky-300 ring-amber-500/30",
-    hero: "text-amber-50/90",
+    card: "border-sky-500/30 bg-gradient-to-b from-sky-500/10 via-neutral-950 to-neutral-950 hover:border-sky-400/50",
+    badge:
+      "border-sky-400/40 bg-sky-500/15 text-sky-200 shadow-[0_0_16px_rgba(56,189,248,0.12)]",
+    iconWrap: "bg-sky-500/15 text-sky-300 ring-sky-500/35",
+    delta: "border-sky-500/15 bg-sky-500/[0.05]",
     Icon: Shield,
   };
 }
 
-function verdictBadgeClass(verdict: string): string {
-  if (isBearishVerdict(verdict)) {
-    return "border-rose-500/40 bg-rose-500/20 text-rose-200";
-  }
-  if (isBullishVerdict(verdict)) {
-    return "border-emerald-500/40 bg-emerald-500/20 text-emerald-200";
-  }
-  return "border-sky-500/35 bg-sky-500/15 text-sky-200";
-}
-
-function ConvictionCard({ card }: { card: AlphaFeedCard }) {
-  const accent = directionAccent(card);
+function EarningsAlertCard({ card }: { card: AlphaFeedCard }) {
+  const accent = alertAccent(card.earningsMismatch);
   const Icon = accent.Icon;
 
   return (
     <Link
       href={`/company/${encodeURIComponent(card.ticker)}`}
-      className={`group flex min-h-[280px] flex-col rounded-xl border p-5 shadow-lg transition ${accent.card}`}
+      className={`group flex min-h-[300px] flex-col rounded-xl border p-5 shadow-lg transition ${accent.card}`}
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <div
-            className={`flex h-8 w-8 items-center justify-center rounded-lg ring-1 ring-inset ${accent.badge}`}
+            className={`flex h-8 w-8 items-center justify-center rounded-lg ring-1 ring-inset ${accent.iconWrap}`}
           >
             <Icon className="h-4 w-4" />
           </div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-            High-Conviction Setup
+            Earnings Alert
           </p>
         </div>
         <ArrowUpRight className="h-4 w-4 text-neutral-600 transition group-hover:text-neutral-300" />
@@ -87,52 +87,42 @@ function ConvictionCard({ card }: { card: AlphaFeedCard }) {
         </p>
       )}
 
-      <p className={`mt-3 text-sm font-medium leading-snug ${accent.hero}`}>
-        {card.heroText}
-      </p>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-4">
         <span
-          className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide ${verdictBadgeClass(card.verdict)}`}
+          className={`inline-flex rounded-md border px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] ${accent.badge}`}
         >
-          {card.verdict}
-        </span>
-        {card.confidenceLabel && (
-          <span
-            className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-wide ${
-              card.confidenceBand === "High"
-                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
-                : card.confidenceBand === "Low"
-                  ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
-                  : "border-indigo-500/40 bg-indigo-500/15 text-indigo-200"
-            }`}
-            title={card.confidenceReason ?? undefined}
-          >
-            {card.confidenceLabel}
-          </span>
-        )}
-        <span className="rounded-md border border-neutral-700/80 bg-neutral-900/80 px-2 py-1 font-mono text-[11px] text-neutral-300">
-          {card.dataPoint}
+          {mismatchToAlertBadge(card.earningsMismatch)}
         </span>
       </div>
 
-      {card.confidenceReason && (
-        <p className="mt-2 text-[11px] leading-snug text-neutral-500">
-          {card.confidenceReason}
-        </p>
-      )}
+      {/* Mismatch delta — two-column institutional metric */}
+      <div
+        className={`mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border ${accent.delta}`}
+      >
+        <div className="bg-neutral-950/80 px-3 py-3">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+            Wall Street Est
+          </p>
+          <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-neutral-100">
+            {formatExpectedRevenueGrowth(card.expectedRevenueGrowth)}
+          </p>
+        </div>
+        <div className="bg-neutral-950/80 px-3 py-3">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+            Search Growth
+          </p>
+          <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-neutral-100">
+            {formatSearchGrowthPct(card.momentumPct)}
+          </p>
+        </div>
+      </div>
 
-      <ul className="mt-3 space-y-2 text-xs leading-snug text-neutral-400">
-        {card.bullets.slice(0, 4).map((bullet, i) => (
-          <li key={i} className="flex gap-2">
-            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-neutral-500" />
-            <span>{bullet}</span>
-          </li>
-        ))}
-      </ul>
+      <p className="mt-4 text-sm font-medium leading-snug text-neutral-200">
+        {card.heroText}
+      </p>
 
       <p className="mt-auto pt-4 text-[10px] uppercase tracking-wider text-neutral-600">
-        Cached insight · open terminal →
+        Earnings Whisper · open terminal →
       </p>
     </Link>
   );
@@ -187,18 +177,17 @@ export default function AlphaFeed() {
         <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-2xl">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-300/80">
-              Discovery Dashboard
+              Earnings Whisper Terminal
             </p>
             <h2 className="mt-2 text-3xl font-semibold tracking-tight text-neutral-50 sm:text-4xl">
-              Top High-Conviction Setups
+              Top Earnings Alerts
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-neutral-400">
-              Ranked by AI confidence, then search-momentum magnitude. Cards
-              self-label as{" "}
-              <span className="text-emerald-400/90">Projected Up</span>,{" "}
-              <span className="text-rose-400/90">Projected Down</span>, or{" "}
-              <span className="text-sky-400/90">Safe Option</span> — no empty
-              strategy placeholders.
+              Search growth vs Wall Street revenue estimates. Cards flag{" "}
+              <span className="text-emerald-400/90">Beat Projected</span>,{" "}
+              <span className="text-rose-400/90">Miss Projected</span>, or{" "}
+              <span className="text-sky-400/90">Priced In</span> — the mismatch
+              delta, not price direction.
             </p>
           </div>
 
@@ -263,7 +252,7 @@ export default function AlphaFeed() {
       {loading && cards.length === 0 && (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950/40 px-6 py-16 text-sm text-neutral-400">
           <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
-          Loading high-conviction setups…
+          Loading earnings alerts…
         </div>
       )}
 
@@ -271,15 +260,15 @@ export default function AlphaFeed() {
         <div className="space-y-3">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
-              <ConvictionCard
-                key={`${card.ticker}-${card.direction}`}
+              <EarningsAlertCard
+                key={`${card.ticker}-${card.earningsMismatch}`}
                 card={card}
               />
             ))}
           </div>
           {meta && (
             <p className="text-right text-[10px] text-neutral-600">
-              {cards.length} setups · {meta.scannedParents} parents ·{" "}
+              {cards.length} alerts · {meta.scannedParents} parents ·{" "}
               {meta.scannedBrands} brands · cached{" "}
               {new Date(meta.generatedAt).toLocaleString(undefined, {
                 dateStyle: "medium",

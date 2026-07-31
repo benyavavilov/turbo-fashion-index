@@ -64,7 +64,16 @@ export async function POST(req: Request) {
         heroText: INSIGHT_GENERATING_FALLBACK,
         sentiment: "NEUTRAL" as const,
         direction: null,
+        earningsMismatch: null,
         bullets: [],
+        hasAssetProfile: false,
+        strategyProfile: null,
+        wallStreetConsensus: null,
+        expectedRevenueGrowth: null,
+        momentumPct: null,
+        terminalVerdict: null,
+        theBuzz: null,
+        theRisk: null,
       });
     }
 
