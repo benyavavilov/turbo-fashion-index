@@ -199,7 +199,6 @@ export async function analyzeSpikeWithGemini(
         const { object } = await generateObject({
           model: google(modelId),
           schema: CatalystVerdictSchema,
-          // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
           tools: {
             google_search: google.tools.googleSearch({}),
           },
@@ -215,7 +214,6 @@ export async function analyzeSpikeWithGemini(
 
       const { text } = await generateText({
         model: google(modelId),
-        // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
         tools: {
           google_search: google.tools.googleSearch({}),
         },

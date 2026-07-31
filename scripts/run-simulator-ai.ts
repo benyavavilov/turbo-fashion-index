@@ -177,7 +177,6 @@ async function analyzeSpikeWithAi(
         const { object } = await generateObject({
           model: google(modelId),
           schema: AiCatalystSchema,
-          // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
           tools: {
             google_search: google.tools.googleSearch({}),
           },
