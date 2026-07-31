@@ -494,7 +494,6 @@ async function runAiBouncer(input: {
         const { object } = await generateObject({
           model: google(modelId),
           schema: DualEngineVerdictSchema,
-          // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
           tools: {
             google_search: google.tools.googleSearch({}),
           },
@@ -510,7 +509,6 @@ async function runAiBouncer(input: {
 
       const { text } = await generateText({
         model: google(modelId),
-        // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
         tools: {
           google_search: google.tools.googleSearch({}),
         },
