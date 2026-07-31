@@ -494,6 +494,7 @@ async function runAiBouncer(input: {
         const { object } = await generateObject({
           model: google(modelId),
           schema: DualEngineVerdictSchema,
+          // @ts-ignore - Vercel AI SDK type mismatch for tools in generateObject
           tools: {
             google_search: google.tools.googleSearch({}),
           },

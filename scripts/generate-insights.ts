@@ -758,7 +758,7 @@ async function generateParentGeminiCopy(input: {
         const { object } = await generateObject({
           model: google(modelId),
           schema: GeminiInsightSchema,
-          // @ts-expect-error googleSearch is supported at runtime for Gemini grounding
+          // @ts-ignore - Vercel AI SDK type mismatch for tools in generateObject
           tools: {
             google_search: google.tools.googleSearch({}),
           },
