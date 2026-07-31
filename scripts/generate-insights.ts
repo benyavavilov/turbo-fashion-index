@@ -758,7 +758,7 @@ async function generateParentGeminiCopy(input: {
         const { object } = await generateObject({
           model: google(modelId),
           schema: GeminiInsightSchema,
-          // @ts-ignore - Vercel AI SDK type mismatch for tools in generateObject
+          // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
           tools: {
             google_search: google.tools.googleSearch({}),
           },
@@ -774,6 +774,7 @@ async function generateParentGeminiCopy(input: {
 
       const { text } = await generateText({
         model: google(modelId),
+        // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
         tools: {
           google_search: google.tools.googleSearch({}),
         },

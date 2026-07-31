@@ -199,6 +199,7 @@ export async function analyzeSpikeWithGemini(
         const { object } = await generateObject({
           model: google(modelId),
           schema: CatalystVerdictSchema,
+          // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
           tools: {
             google_search: google.tools.googleSearch({}),
           },
@@ -214,6 +215,7 @@ export async function analyzeSpikeWithGemini(
 
       const { text } = await generateText({
         model: google(modelId),
+        // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
         tools: {
           google_search: google.tools.googleSearch({}),
         },

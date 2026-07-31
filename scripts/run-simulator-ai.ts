@@ -177,6 +177,7 @@ async function analyzeSpikeWithAi(
         const { object } = await generateObject({
           model: google(modelId),
           schema: AiCatalystSchema,
+          // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
           tools: {
             google_search: google.tools.googleSearch({}),
           },
@@ -194,6 +195,7 @@ async function analyzeSpikeWithAi(
 
       const { text } = await generateText({
         model: google(modelId),
+        // @ts-ignore - Bypassing Vercel AI SDK strict type mismatch for tools
         tools: {
           google_search: google.tools.googleSearch({}),
         },
