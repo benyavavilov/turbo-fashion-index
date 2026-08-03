@@ -40,6 +40,8 @@ const MIN_POSITIVE_CORR = 0.15;
 const HOLD_WEEKS = 13;
 const HOLD_DAYS = 90;
 const YAHOO_PAUSE_MS = 500;
+/** Adverse fill: pay 0.1% more on entry, receive 0.1% less on exit. */
+const SLIPPAGE_RATE = 0.001;
 
 const yahooFinance = new YahooFinance();
 
@@ -89,6 +91,18 @@ function nearestOnOrAfter(
   const target = normalizeDateString(targetDate);
   for (const bar of bars) {
     if (bar.date >= target) return bar;
+  }
+  return null;
+}
+
+/** T+1: first bar strictly after the signal date. */
+function nextTradingBar(
+  bars: WeeklyBar[],
+  signalDate: string
+): WeeklyBar | null {
+  const target = normalizeDateString(signalDate);
+  for (const bar of bars) {
+    if (bar.date > target) return bar;
   }
   return null;
 }
@@ -379,14 +393,23 @@ async function main() {
     let counted = 0;
 
     for (const trigger of triggers) {
-      const entry = nearestOnOrAfter(stockBars, trigger.date);
-      const exit = priceAfterDays(stockBars, trigger.date, HOLD_DAYS);
-      const spxEntry = nearestOnOrAfter(spxBars, trigger.date);
-      const spxExit = priceAfterDays(spxBars, trigger.date, HOLD_DAYS);
+      const entry = nextTradingBar(stockBars, trigger.date);
+      const exit = entry
+        ? priceAfterDays(stockBars, entry.date, HOLD_DAYS)
+        : null;
+      const spxEntry = entry
+        ? nearestOnOrAfter(spxBars, entry.date)
+        : null;
+      const spxExit =
+        entry && spxEntry
+          ? priceAfterDays(spxBars, entry.date, HOLD_DAYS)
+          : null;
       if (!entry || !exit || !spxEntry || !spxExit) continue;
       if (exit.date <= entry.date || spxExit.date <= spxEntry.date) continue;
 
-      const stockReturnPct = pctReturn(entry.close, exit.close);
+      const entryFill = entry.close * (1 + SLIPPAGE_RATE);
+      const exitFill = exit.close * (1 - SLIPPAGE_RATE);
+      const stockReturnPct = pctReturn(entryFill, exitFill);
       const spxReturnPct = pctReturn(spxEntry.close, spxExit.close);
       if (!Number.isFinite(stockReturnPct) || !Number.isFinite(spxReturnPct)) {
         continue;

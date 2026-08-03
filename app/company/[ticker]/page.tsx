@@ -16,29 +16,15 @@ import { createBrowserSupabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-/** Ultimate Handbook columns from ai_insights. */
+/** Lean Earnings Whisper columns from ai_insights. */
 const ASSET_PROFILE_SELECT = [
   "ticker",
   "parent_name",
   "brand",
   "earnings_mismatch",
-  "direction",
-  "momentum_pct",
-  "correlation",
-  "hero_text",
-  "bullet_points",
-  "sentiment",
-  "data_point",
-  "average_return_pct",
-  "event_count",
-  "last_price",
-  "strategy_profile",
-  "wall_street_consensus",
   "expected_revenue_growth",
+  "momentum_pct",
   "terminal_verdict",
-  "the_buzz",
-  "the_risk",
-  "generated_at",
 ].join(",");
 
 export function generateStaticParams() {
@@ -88,7 +74,7 @@ export default async function CompanyPage({
   const insight = await loadCachedInsight(ticker);
 
   return (
-    <div className="min-h-screen bg-neutral-950">
+    <div className="min-h-screen bg-slate-50">
       <TerminalChrome subtitle={`${parent.name} · Earnings Whisper`} />
       <main className="mx-auto max-w-[1600px] p-6">
         <CompanyTerminal parent={parent} initialInsight={insight} />

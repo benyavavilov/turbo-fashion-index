@@ -1,8 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #e5e5e5;
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --royal: #1d4ed8;
+  --royal-dark: #1e40af;
+  --muted: #64748b;
+  --border: #e2e8f0;
 }
 
 @theme inline {
@@ -13,7 +17,7 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
@@ -30,13 +34,11 @@ body {
   outline: none !important;
 }
 
-/* Keep fill transparent (area cursor bloating) but allow stroke from Tooltip cursor prop */
 .recharts-tooltip-cursor {
   fill: transparent !important;
 }
 
-/* Thin, subtle scrollbars to match the analytical aesthetic */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: #cbd5e1 transparent;
 }

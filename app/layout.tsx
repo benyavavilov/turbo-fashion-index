@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Turbo Fashion Index — Curated Intelligence",
+  title: "Turbo Fashion Index — Institutional Intelligence",
   description:
-    "Parent-company intelligence terminal: child brand Google search trends vs equity prices, event-study alpha, and Gemini catalysts.",
+    "Parent-company intelligence terminal: child brand Google search trends vs equity prices, earnings mismatch, and Wall Street consensus.",
 };
 
 export default function RootLayout({
@@ -28,7 +28,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-neutral-950 text-neutral-200">
+      <body className="min-h-full bg-white text-slate-900">
         {children}
       </body>
     </html>

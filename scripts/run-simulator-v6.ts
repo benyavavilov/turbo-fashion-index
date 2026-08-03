@@ -49,8 +49,8 @@ const COOLDOWN_WEEKS = 4;
 const COOLDOWN_DAYS = 30;
 /** Hard cap: never put more than this fraction of portfolio into one name. */
 const MAX_POSITION_PCT = 0.3;
-/** Round-trip trading friction (applied on each buy and each sell). */
-const SLIPPAGE_RATE = 0.002;
+/** Round-trip trading friction: 0.1% adverse price on each side. */
+const SLIPPAGE_RATE = 0.001;
 /** V6: minimum idle cash required to pyramid / scale in. */
 const MIN_SCALE_IN_CASH = 1_000;
 /** V6: take partial profits once unrealized gain hits this multiple of entry. */
@@ -245,6 +245,26 @@ function nearestOnOrAfter(
     if (bar.date >= target) return bar;
   }
   return null;
+}
+
+/** T+1 fill: first bar strictly after the signal date (weekend lag). */
+function nextTradingBar(
+  bars: WeeklyBar[],
+  signalDate: string
+): WeeklyBar | null {
+  const target = normalizeDateString(signalDate);
+  for (const bar of bars) {
+    if (bar.date > target) return bar;
+  }
+  return null;
+}
+
+function applyEntrySlippage(rawPrice: number): number {
+  return rawPrice * (1 + SLIPPAGE_RATE);
+}
+
+function applyExitSlippage(rawPrice: number): number {
+  return rawPrice * (1 - SLIPPAGE_RATE);
 }
 
 function nearestOnOrBefore(
@@ -465,9 +485,9 @@ function closePosition(input: {
   const costSlice = input.costSlice ?? pos.cost;
   const buyFeeSlice = input.buyFeeSlice ?? pos.buyFee;
 
-  const grossProceeds = sharesToSell * exitBar.close;
-  const sellFee = grossProceeds * SLIPPAGE_RATE;
-  const proceeds = grossProceeds - sellFee;
+  const exitPrice = applyExitSlippage(exitBar.close);
+  const proceeds = sharesToSell * exitPrice;
+  const sellFee = sharesToSell * exitBar.close * SLIPPAGE_RATE;
   const feesPaid = buyFeeSlice + sellFee;
   const pnl = proceeds - costSlice - buyFeeSlice;
   const invested = costSlice + buyFeeSlice;
@@ -496,7 +516,7 @@ function closePosition(input: {
       exitDate: exitBar.date,
       daysHeld,
       entryPrice: pos.entryPrice,
-      exitPrice: exitBar.close,
+      exitPrice,
       cost: costSlice,
       proceeds,
       pnl,
@@ -979,19 +999,20 @@ async function main() {
           if (cash >= MIN_SCALE_IN_CASH) {
             const bars = stockBarsByTicker.get(signal.ticker);
             const entryBar = bars
-              ? nearestOnOrAfter(bars, weekDate) ??
-                nearestOnOrBefore(bars, weekDate)
+              ? nextTradingBar(bars, weekDate) ??
+                nearestOnOrAfter(bars, weekDate)
               : null;
             if (entryBar && entryBar.close > 0) {
               const allocation = cash * 0.5;
+              const fillPrice = applyEntrySlippage(entryBar.close);
               const buyFee = allocation * SLIPPAGE_RATE;
               const totalDebit = allocation + buyFee;
               if (totalDebit <= cash + 1e-9) {
-                const newShares = allocation / entryBar.close;
+                const newShares = allocation / fillPrice;
                 const oldShares = held.shares;
                 const totalShares = oldShares + newShares;
                 held.entryPrice =
-                  (oldShares * held.entryPrice + newShares * entryBar.close) /
+                  (oldShares * held.entryPrice + newShares * fillPrice) /
                   totalShares;
                 held.shares = totalShares;
                 held.cost += allocation;
@@ -1001,8 +1022,8 @@ async function main() {
                 held.yoyGrowthPct = signal.yoyGrowthPct;
                 held.correlation = signal.correlation;
                 held.convictionScore = signal.convictionScore;
-                if (entryBar.close > held.highestPriceReached) {
-                  held.highestPriceReached = entryBar.close;
+                if (fillPrice > held.highestPriceReached) {
+                  held.highestPriceReached = fillPrice;
                 }
                 if (held.brand !== signal.brand) held.brand = signal.brand;
                 cash -= totalDebit;
@@ -1023,7 +1044,7 @@ async function main() {
         const bars = stockBarsByTicker.get(signal.ticker);
         if (!bars) continue;
         const entryBar =
-          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
+          nextTradingBar(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
         if (!entryBar || entryBar.close <= 0) continue;
         buyable.push({ signal, entryBar });
       }
@@ -1039,11 +1060,12 @@ async function main() {
         );
 
         for (const { signal, entryBar, allocation } of allocations) {
+          const entryPrice = applyEntrySlippage(entryBar.close);
           const buyFee = allocation * SLIPPAGE_RATE;
           const totalDebit = allocation + buyFee;
           if (totalDebit > cash + 1e-9) continue;
 
-          const shares = allocation / entryBar.close;
+          const shares = allocation / entryPrice;
           cash -= totalDebit;
           totalFeesPaid += buyFee;
           open.push({
@@ -1053,14 +1075,14 @@ async function main() {
             originalEntryDate: entryBar.date,
             entryDate: entryBar.date,
             entryWeekIdx: w,
-            entryPrice: entryBar.close,
+            entryPrice,
             shares,
             cost: allocation,
             buyFee,
             yoyGrowthPct: signal.yoyGrowthPct,
             correlation: signal.correlation,
             convictionScore: signal.convictionScore,
-            highestPriceReached: entryBar.close,
+            highestPriceReached: entryPrice,
             hasTrimmed: false,
           });
           heldByTicker.set(signal.ticker, open[open.length - 1]);

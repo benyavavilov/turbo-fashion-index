@@ -12,7 +12,9 @@
     "backtest": "node --env-file=.env.local --import tsx scripts/run-backtest.ts",
     "simulate": "node --env-file=.env.local --import tsx scripts/run-simulator.ts",
     "simulate:v6": "node --env-file=.env.local --import tsx scripts/run-simulator-v6.ts",
-    "etl": "npm run fetch:trends && npm run generate:insights"
+    "etl": "npm run fetch:trends && npm run generate:insights",
+    "hypothesis": "npx tsx --env-file=.env.local scripts/run-hypothesis-tester.ts",
+    "alpha": "npx tsx --env-file=.env.local scripts/run-alpha-backtester.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.8",

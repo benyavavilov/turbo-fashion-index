@@ -47,7 +47,9 @@ export async function POST(req: Request) {
 
     const { data, error } = await supabase
       .from("ai_insights")
-      .select("*")
+      .select(
+        "ticker, parent_name, brand, earnings_mismatch, expected_revenue_growth, momentum_pct, terminal_verdict"
+      )
       .eq("ticker", ticker);
 
     if (error) {

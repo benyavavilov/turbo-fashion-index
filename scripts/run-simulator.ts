@@ -55,8 +55,8 @@ const MAX_POSITION_PCT = 0.2;
 const OPPORTUNITY_YOY_GAP = 15;
 /** Skip / replace only when deployable cash is below this fraction of the 20% slot. */
 const CASH_STARVED_FRACTION = 0.1;
-/** Round-trip trading friction (applied on each buy and each sell). */
-const SLIPPAGE_RATE = 0.002;
+/** Round-trip trading friction: 0.1% adverse price on each side. */
+const SLIPPAGE_RATE = 0.001;
 const YAHOO_PAUSE_MS = 500;
 
 const STARTING_CAPITAL = 10_000;
@@ -241,6 +241,26 @@ function nearestOnOrAfter(
     if (bar.date >= target) return bar;
   }
   return null;
+}
+
+/** T+1 fill: first bar strictly after the signal date (weekend lag). */
+function nextTradingBar(
+  bars: WeeklyBar[],
+  signalDate: string
+): WeeklyBar | null {
+  const target = normalizeDateString(signalDate);
+  for (const bar of bars) {
+    if (bar.date > target) return bar;
+  }
+  return null;
+}
+
+function applyEntrySlippage(rawPrice: number): number {
+  return rawPrice * (1 + SLIPPAGE_RATE);
+}
+
+function applyExitSlippage(rawPrice: number): number {
+  return rawPrice * (1 - SLIPPAGE_RATE);
 }
 
 function nearestOnOrBefore(
@@ -452,9 +472,9 @@ function closePosition(input: {
   replacedByBrand?: string;
 }): { trade: ClosedTrade; sellFee: number; netProceeds: number } {
   const { pos, exitBar, spxBars, exitReason, replacedByBrand } = input;
-  const grossProceeds = pos.shares * exitBar.close;
-  const sellFee = grossProceeds * SLIPPAGE_RATE;
-  const proceeds = grossProceeds - sellFee;
+  const exitPrice = applyExitSlippage(exitBar.close);
+  const proceeds = pos.shares * exitPrice;
+  const sellFee = pos.shares * exitBar.close * SLIPPAGE_RATE;
   const feesPaid = pos.buyFee + sellFee;
   const pnl = proceeds - pos.cost - pos.buyFee;
   const invested = pos.cost + pos.buyFee;
@@ -483,7 +503,7 @@ function closePosition(input: {
       exitDate: exitBar.date,
       daysHeld,
       entryPrice: pos.entryPrice,
-      exitPrice: exitBar.close,
+      exitPrice,
       cost: pos.cost,
       proceeds,
       pnl,
@@ -850,8 +870,9 @@ async function runSimulation(
 
         const bars = stockBarsByTicker.get(signal.ticker);
         if (!bars) continue;
+        // T+1: fill on the first bar strictly after the signal week.
         const entryBar =
-          nearestOnOrAfter(bars, weekDate) ?? nearestOnOrBefore(bars, weekDate);
+          nextTradingBar(bars, weekDate) ?? nearestOnOrAfter(bars, weekDate);
         if (!entryBar || entryBar.close <= 0) continue;
 
         let portfolioValue =
@@ -911,11 +932,12 @@ async function runSimulation(
         const allocation = sizeHybridAllocation(cash, portfolioValue);
         if (allocation < 1) continue;
 
+        const entryPrice = applyEntrySlippage(entryBar.close);
         const buyFee = allocation * SLIPPAGE_RATE;
         const totalDebit = allocation + buyFee;
         if (totalDebit > cash + 1e-9) continue;
 
-        const shares = allocation / entryBar.close;
+        const shares = allocation / entryPrice;
         cash -= totalDebit;
         totalFeesPaid += buyFee;
         open.push({
@@ -925,7 +947,7 @@ async function runSimulation(
           originalEntryDate: entryBar.date,
           entryDate: entryBar.date,
           entryWeekIdx: w,
-          entryPrice: entryBar.close,
+          entryPrice,
           shares,
           cost: allocation,
           buyFee,

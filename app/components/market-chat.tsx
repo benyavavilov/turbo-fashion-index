@@ -95,16 +95,16 @@ export default function MarketChat() {
   };
 
   return (
-    <section className="flex h-full min-h-[420px] flex-col overflow-hidden rounded-xl border border-neutral-800/80 bg-gradient-to-b from-neutral-900/80 via-neutral-950 to-neutral-950">
-      <header className="flex items-center gap-3 border-b border-neutral-800/80 px-5 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/15 ring-1 ring-indigo-500/30">
-          <Bot className="h-4 w-4 text-indigo-300" />
+    <section className="flex h-full min-h-[420px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-700 text-white">
+          <Bot className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-sm font-semibold text-neutral-100">
+          <p className="text-sm font-semibold text-slate-900">
             Market Desk Chat
           </p>
-          <p className="text-[10px] uppercase tracking-[0.16em] text-neutral-500">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
             Ask Gemini about the broader market…
           </p>
         </div>
@@ -112,7 +112,7 @@ export default function MarketChat() {
 
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
-          <div className="rounded-lg border border-neutral-800/80 bg-neutral-900/40 p-4 text-sm leading-relaxed text-neutral-400">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-600">
             Ask about sector rotation, search-led demand shifts across fashion
             parents, or how Google Trends momentum might map to equities this
             week. Live stream via Gemini — Alpha Feed cards stay pre-computed.
@@ -123,11 +123,11 @@ export default function MarketChat() {
             key={m.id}
             className={`rounded-lg px-3 py-2 text-sm ${
               m.role === "user"
-                ? "ml-6 bg-indigo-500/15 text-indigo-100"
-                : "mr-2 border border-neutral-800 bg-neutral-900/60 text-neutral-200"
+                ? "ml-6 bg-blue-50 text-blue-900"
+                : "mr-2 border border-slate-200 bg-slate-50 text-slate-800"
             }`}
           >
-            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
               {m.role === "user" ? "You" : "Lead Analyst"}
             </p>
             {m.parts.map((part, i) =>
@@ -139,7 +139,7 @@ export default function MarketChat() {
                 ) : (
                   <div
                     key={i}
-                    className="prose prose-invert prose-sm max-w-none leading-relaxed prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-neutral-100"
+                    className="prose prose-sm max-w-none leading-relaxed prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-slate-900"
                   >
                     <ReactMarkdown>{part.text}</ReactMarkdown>
                   </div>
@@ -149,24 +149,24 @@ export default function MarketChat() {
           </div>
         ))}
         {displayError && (
-          <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {displayError}
           </div>
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="border-t border-neutral-800 p-4">
+      <form onSubmit={onSubmit} className="border-t border-slate-200 p-4">
         <div className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask Gemini about the broader market…"
-            className="flex-1 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-indigo-500/50"
+            className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-500"
           />
           <button
             type="submit"
             disabled={isBusy || !input.trim()}
-            className="rounded-lg bg-indigo-600 px-3 py-2.5 text-white transition hover:bg-indigo-500 disabled:opacity-40"
+            className="rounded-lg bg-blue-700 px-3 py-2.5 text-white transition hover:bg-blue-800 disabled:opacity-40"
             aria-label="Send"
           >
             <Send className="h-4 w-4" />

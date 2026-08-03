@@ -42,24 +42,26 @@ export interface AiInsightRow {
   /** @deprecated Prefer earnings_mismatch. */
   direction?: InsightDirection | null;
   momentum_pct: number | null;
-  correlation: number | null;
-  hero_text: string;
-  bullet_points: string[];
-  sentiment: "POSITIVE" | "NEGATIVE" | "NEUTRAL";
-  data_point: string | null;
-  average_return_pct: number | null;
-  event_count: number | null;
-  last_price: number | null;
+  correlation?: number | null;
+  hero_text?: string | null;
+  bullet_points?: string[] | null;
+  sentiment?: "POSITIVE" | "NEGATIVE" | "NEUTRAL" | null;
+  data_point?: string | null;
+  average_return_pct?: number | null;
+  event_count?: number | null;
+  last_price?: number | null;
   confidence_score?: number | null;
   reasoning_for_confidence?: string | null;
   /** Fluid Asset Profile handbook fields (ai_insights). */
   strategy_profile?: string | null;
   wall_street_consensus?: string | null;
   expected_revenue_growth?: string | null;
+  /** ISO date (YYYY-MM-DD) of the next earnings print, from Yahoo calendarEvents. */
+  next_earnings_date?: string | null;
   terminal_verdict?: string | null;
   the_buzz?: string | null;
   the_risk?: string | null;
-  generated_at: string;
+  generated_at?: string;
 }
 
 export interface AlphaFeedCard {
@@ -82,7 +84,13 @@ export interface AlphaFeedCard {
   direction: InsightDirection;
   /** Sanitized YoY search growth % (momentum_pct). */
   momentumPct: number | null;
+  /** Post-2024 Sniper win rate label, e.g. "4/5 • 80%". */
+  historicalAccuracyLabel: string | null;
+  /** Post-2024 Sniper win rate percent (0–100). */
+  historicalAccuracyPct: number | null;
   expectedRevenueGrowth: string | null;
+  /** Next earnings date YYYY-MM-DD when known. */
+  nextEarningsDate: string | null;
   confidenceScore: number | null;
   confidenceBand: ConfidenceBand | null;
   confidenceReason: string | null;
@@ -153,6 +161,19 @@ export function formatConfidenceLabel(
   const band = confidenceBandFromScore(score);
   if (band == null || score == null) return null;
   return `Confidence: ${band} / ${Math.round(score)}`;
+}
+
+/** Normalize Yahoo / DB next-earnings values to YYYY-MM-DD or null. */
+export function normalizeNextEarningsDate(
+  value: string | null | undefined
+): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed === "N/A") return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+  const ms = Date.parse(trimmed);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** Normalize mismatch from new column or legacy direction. */
@@ -256,7 +277,10 @@ export function dedupeParentInsights(rows: AiInsightRow[]): AiInsightRow[] {
   for (const row of rows) {
     const key = row.ticker.toUpperCase();
     const existing = byTicker.get(key);
-    if (!existing || row.generated_at > existing.generated_at) {
+    if (
+      !existing ||
+      (row.generated_at ?? "") > (existing.generated_at ?? "")
+    ) {
       byTicker.set(key, row);
     }
   }
@@ -270,12 +294,14 @@ export function insightRowToCard(row: AiInsightRow): AlphaFeedCard {
     Number.isFinite(row.confidence_score)
       ? Math.max(1, Math.min(10, Math.round(row.confidence_score)))
       : null;
+  const terminalVerdict =
+    row.terminal_verdict?.trim() || row.hero_text?.trim() || "";
   return {
     kind: mismatchToKind(earningsMismatch),
     parentName: row.parent_name,
     ticker: row.ticker,
     brand: row.brand,
-    heroText: row.hero_text,
+    heroText: terminalVerdict,
     dataPoint:
       row.data_point ??
       (row.momentum_pct != null
@@ -285,16 +311,19 @@ export function insightRowToCard(row: AiInsightRow): AlphaFeedCard {
     eventCount: row.event_count ?? 0,
     verdict: mismatchToVerdict(earningsMismatch),
     bullets: asBulletList(row.bullet_points),
-    lastPrice: row.last_price,
+    lastPrice: row.last_price ?? null,
     sentiment: row.sentiment ?? mismatchToSentiment(earningsMismatch),
-    reason: row.hero_text,
+    reason: terminalVerdict,
     earningsMismatch,
     direction: mismatchToDirection(earningsMismatch),
     momentumPct:
       typeof row.momentum_pct === "number" && Number.isFinite(row.momentum_pct)
         ? row.momentum_pct
         : null,
+    historicalAccuracyLabel: null,
+    historicalAccuracyPct: null,
     expectedRevenueGrowth: row.expected_revenue_growth?.trim() || null,
+    nextEarningsDate: normalizeNextEarningsDate(row.next_earnings_date),
     confidenceScore,
     confidenceBand: confidenceBandFromScore(confidenceScore),
     confidenceReason: row.reasoning_for_confidence?.trim() || null,
@@ -360,12 +389,10 @@ export function selectStrategyDashboard(rows: AiInsightRow[]): StrategySlot[] {
   const pricedIn =
     [...parents]
       .filter((r) => resolveEarningsMismatch(r) === "PRICED_IN")
-      .sort((a, b) => {
-        const corrDelta =
-          Math.abs(b.correlation ?? 0) - Math.abs(a.correlation ?? 0);
-        if (corrDelta !== 0) return corrDelta;
-        return (b.momentum_pct ?? -Infinity) - (a.momentum_pct ?? -Infinity);
-      })[0] ?? null;
+      .sort(
+        (a, b) =>
+          Math.abs(b.momentum_pct ?? 0) - Math.abs(a.momentum_pct ?? 0)
+      )[0] ?? null;
 
   return buildStrategySlots({
     beatLikely,
@@ -375,20 +402,17 @@ export function selectStrategyDashboard(rows: AiInsightRow[]): StrategySlot[] {
 }
 
 /**
- * Top N high-conviction insights: confidence_score DESC, then |momentum_pct| DESC.
+ * Top N Earnings Whisper alerts: |momentum_pct| DESC (largest mismatches first).
  */
 export function selectHighConvictionInsights(
   rows: AiInsightRow[],
   limit = 6
 ): AlphaFeedCard[] {
   const ranked = dedupeParentInsights(rows).sort((a, b) => {
-    const ac = a.confidence_score ?? -1;
-    const bc = b.confidence_score ?? -1;
-    if (bc !== ac) return bc - ac;
     const am = Math.abs(a.momentum_pct ?? 0);
     const bm = Math.abs(b.momentum_pct ?? 0);
     if (bm !== am) return bm - am;
-    return Math.abs(b.correlation ?? 0) - Math.abs(a.correlation ?? 0);
+    return (a.ticker ?? "").localeCompare(b.ticker ?? "");
   });
   return ranked.slice(0, limit).map(insightRowToCard);
 }
@@ -442,8 +466,8 @@ export function selectBriefForTicker(
   );
 
   return {
-    headline: terminalVerdict ?? best.hero_text,
-    heroText: terminalVerdict ?? best.hero_text,
+    headline: terminalVerdict ?? best.hero_text ?? `${best.ticker} Earnings Whisper`,
+    heroText: terminalVerdict ?? best.hero_text ?? "",
     sentiment: best.sentiment ?? mismatchToSentiment(earningsMismatch),
     earningsMismatch,
     direction: mismatchToDirection(earningsMismatch),
@@ -451,7 +475,7 @@ export function selectBriefForTicker(
     found: true,
     dataPoint: best.data_point,
     brand: best.brand,
-    generatedAt: best.generated_at,
+    generatedAt: best.generated_at ?? null,
     confidenceScore,
     confidenceLabel: formatConfidenceLabel(confidenceScore),
     confidenceReason: best.reasoning_for_confidence?.trim() || null,

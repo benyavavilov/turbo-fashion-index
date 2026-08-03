@@ -23,10 +23,10 @@ export default function CompanyChat({
       new DefaultChatTransport({
         api: "/api/chat",
         body: { chartContext },
-        fetch: async (input, init) => {
+        fetch: async (inputUrl, init) => {
           let res: Response;
           try {
-            res = await fetch(input, init);
+            res = await fetch(inputUrl, init);
           } catch (err) {
             const message =
               err instanceof Error ? err.message : "Network request failed";
@@ -90,29 +90,28 @@ export default function CompanyChat({
   };
 
   return (
-    <div className="mt-5 flex min-h-[280px] flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950/60">
-      <div className="flex items-center gap-2 border-b border-neutral-800/80 px-3 py-2">
-        <MessageSquare className="h-3.5 w-3.5 text-indigo-400" />
-        <p className="text-[11px] font-semibold tracking-tight text-neutral-300">
+    <div className="flex min-h-[240px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
+        <MessageSquare className="h-4 w-4 text-blue-700" />
+        <p className="text-sm font-semibold text-slate-900">
           Ask Gemini about ${ticker}
         </p>
       </div>
 
-      <div className="max-h-[220px] flex-1 space-y-2 overflow-y-auto px-3 py-3">
+      <div className="max-h-[220px] flex-1 space-y-2 overflow-y-auto px-4 py-3">
         {messages.length === 0 && (
-          <p className="text-[11px] leading-relaxed text-neutral-600">
+          <p className="text-xs leading-relaxed text-slate-500">
             Ask why search spiked, what drove a drawdown, or how child-brand
-            momentum maps to ${ticker}. Context includes this parent page and
-            any catalyst briefings from Analyze.
+            momentum maps to ${ticker}.
           </p>
         )}
         {messages.map((m) => (
           <div
             key={m.id}
-            className={`rounded-md px-2.5 py-1.5 text-[11px] ${
+            className={`rounded-lg px-3 py-2 text-xs ${
               m.role === "user"
-                ? "ml-4 bg-indigo-500/15 text-indigo-100"
-                : "mr-2 border border-neutral-800 bg-neutral-900/70 text-neutral-300"
+                ? "ml-6 bg-blue-50 text-blue-900"
+                : "mr-2 border border-slate-200 bg-slate-50 text-slate-800"
             }`}
           >
             {m.parts.map((part, i) =>
@@ -124,7 +123,7 @@ export default function CompanyChat({
                 ) : (
                   <div
                     key={i}
-                    className="prose prose-invert prose-sm max-w-none text-[11px] leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-headings:my-1 prose-strong:text-neutral-100"
+                    className="prose prose-sm max-w-none text-xs leading-relaxed prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-headings:my-1 prose-strong:text-slate-900"
                   >
                     <ReactMarkdown>{part.text}</ReactMarkdown>
                   </div>
@@ -134,30 +133,27 @@ export default function CompanyChat({
           </div>
         ))}
         {displayError && (
-          <p className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-300">
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {displayError}
           </p>
         )}
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        className="border-t border-neutral-800/80 p-2"
-      >
-        <div className="flex gap-1.5">
+      <form onSubmit={onSubmit} className="border-t border-slate-200 p-3">
+        <div className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={`Ask Gemini about $${ticker}…`}
-            className="min-w-0 flex-1 rounded-md border border-neutral-800 bg-neutral-900/80 px-2.5 py-1.5 text-[11px] text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-indigo-500/40"
+            className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-700 focus:bg-white"
           />
           <button
             type="submit"
             disabled={isBusy || !input.trim()}
-            className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-white transition hover:bg-indigo-500 disabled:opacity-40"
+            className="rounded-lg bg-blue-700 px-3 py-2.5 text-white transition hover:bg-blue-800 disabled:opacity-40"
             aria-label="Send"
           >
-            <Send className="h-3.5 w-3.5" />
+            <Send className="h-4 w-4" />
           </button>
         </div>
       </form>

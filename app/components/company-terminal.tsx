@@ -6,11 +6,7 @@ import {
   ArrowLeft,
   Bot,
   Loader2,
-  Newspaper,
-  RefreshCw,
   Scale,
-  ShieldAlert,
-  Target,
 } from "lucide-react";
 import {
   Area,
@@ -26,6 +22,8 @@ import {
 
 import { getTrendData } from "@/app/actions";
 import CompanyChat from "@/app/components/company-chat";
+import { formatVerdictText } from "@/app/components/format-verdict-text";
+import historicalEstimates from "@/data/historical-estimates.json";
 import type { ParentCompany } from "@/lib/entities";
 import {
   INSIGHT_GENERATING_FALLBACK,
@@ -50,18 +48,41 @@ import {
 } from "@/lib/event-study";
 import { formatUsd } from "@/lib/paper-portfolio";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import {
+  SNIPER_LEDGER_MIN_DATE,
+  buildSniperLedgerRows,
+  calculateHistoricalSniperAccuracy,
+  type SniperPrediction,
+} from "@/lib/sniper-accuracy";
 
 const STOCK_KEY = "__stock";
+const YOY_LAG_DAYS = 365;
 const BRAND_COLORS = [
-  "#38bdf8",
-  "#a78bfa",
-  "#34d399",
-  "#fbbf24",
-  "#f472b6",
-  "#fb7185",
-  "#2dd4bf",
-  "#c084fc",
+  "#1d4ed8",
+  "#7c3aed",
+  "#059669",
+  "#d97706",
+  "#db2777",
+  "#e11d48",
+  "#0d9488",
+  "#6d28d9",
 ];
+
+const STOCK_STROKE = "#1d4ed8";
+const STOCK_FILL = "#1d4ed8";
+const GRID_STROKE = "#e2e8f0";
+const AXIS_TICK = "#64748b";
+const AXIS_LINE = "#cbd5e1";
+
+type HistoricalEstimate = {
+  date: string;
+  estimatedRevenueGrowth: number;
+  actualRevenueGrowth: number;
+};
+
+type HistoricalEstimatesMap = Record<string, HistoricalEstimate[]>;
+
+const ESTIMATES = historicalEstimates as HistoricalEstimatesMap;
 
 /** Catalyst metadata injected onto continuous weekly chart rows. */
 interface InjectedCatalyst {
@@ -75,7 +96,13 @@ type ChartPoint = {
   date: string;
   catalyst?: InjectedCatalyst | null;
   catalysts?: InjectedCatalyst[];
-  [key: string]: string | number | null | undefined | InjectedCatalyst | InjectedCatalyst[];
+  [key: string]:
+    | string
+    | number
+    | null
+    | undefined
+    | InjectedCatalyst
+    | InjectedCatalyst[];
 };
 
 type ChartTooltipProps = {
@@ -88,6 +115,13 @@ type ChartTooltipProps = {
     color?: string;
     payload?: ChartPoint;
   }>;
+};
+
+type FundamentalsState = {
+  trailingPE: string;
+  forwardPE: string;
+  nextEarnings: string;
+  recommendationKey: string;
 };
 
 function sortByDateAsc<T extends { date: string }>(rows: T[]): T[] {
@@ -118,6 +152,25 @@ function snapToChartDate(
   return best?.date ?? null;
 }
 
+function formatGrowthPct(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function toIsoDateLocal(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseIsoDateLocal(iso: string): Date | null {
+  const normalized = normalizeDateString(iso);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const d = new Date(`${normalized}T12:00:00`);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
 function CatalystTooltipCard({
   catalysts,
   date,
@@ -126,17 +179,17 @@ function CatalystTooltipCard({
   date: string;
 }) {
   return (
-    <div className="max-w-[280px] rounded-lg border border-amber-500/35 bg-neutral-950/95 px-3 py-2 shadow-xl">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-300">
+    <div className="max-w-[280px] rounded-lg border border-amber-400/50 bg-white px-3 py-2 shadow-xl">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-600">
         Catalyst Event
       </p>
       {catalysts.map((c) => (
         <div key={`${c.brand}-${c.reason.slice(0, 24)}`} className="mt-2 first:mt-1">
-          <p className="font-mono text-[10px] text-neutral-500">
+          <p className="font-mono text-[10px] text-slate-500">
             {date} · {c.brand}
             {c.sentiment ? ` · ${c.sentiment}` : ""}
           </p>
-          <p className="mt-1 text-xs leading-snug text-neutral-200">{c.reason}</p>
+          <p className="mt-1 text-xs leading-snug text-slate-800">{c.reason}</p>
         </div>
       ))}
     </div>
@@ -164,21 +217,21 @@ function CustomCatalystDot(props: {
   if (!match) return null;
 
   const negative = match.sentiment === "NEGATIVE";
-  const fill = negative ? "#fb7185" : "#34d399";
-  const glow = negative ? "rgba(251,113,133,0.55)" : "rgba(52,211,153,0.55)";
+  const fill = negative ? "#dc2626" : "#16a34a";
+  const glow = negative ? "rgba(220,38,38,0.35)" : "rgba(22,163,74,0.35)";
 
   return (
     <g style={{ pointerEvents: "none" }}>
-      <circle cx={cx} cy={cy} r={10} fill={glow} opacity={0.4} />
+      <circle cx={cx} cy={cy} r={10} fill={glow} opacity={0.45} />
       <circle
         cx={cx}
         cy={cy}
         r={5}
         fill={fill}
-        stroke="#0a0a0a"
+        stroke="#ffffff"
         strokeWidth={1.5}
       />
-      <circle cx={cx} cy={cy} r={2} fill="#fafafa" />
+      <circle cx={cx} cy={cy} r={2} fill="#0f172a" />
     </g>
   );
 }
@@ -210,10 +263,10 @@ function CompanyChartTooltip({ active, payload, label }: ChartTooltipProps) {
   if (seriesRows.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-neutral-700 bg-neutral-950/95 px-3 py-2 text-xs shadow-xl">
-      <p className="mb-1 font-mono text-[10px] text-neutral-500">{label}</p>
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl">
+      <p className="mb-1 font-mono text-[10px] text-slate-500">{label}</p>
       {seriesRows.map((p) => (
-        <p key={String(p.dataKey)} className="text-neutral-300">
+        <p key={String(p.dataKey)} className="text-slate-700">
           <span style={{ color: String(p.color) }}>{p.name}</span>:{" "}
           <span className="font-mono">
             {typeof p.value === "number" ? p.value.toFixed(1) : p.value}
@@ -232,7 +285,7 @@ function wallStreetBadgeClass(raw: string | null | undefined) {
     key.includes("overweight") ||
     key.includes("strong_buy")
   ) {
-    return "border-emerald-500/40 bg-emerald-500/15 text-emerald-200";
+    return "border-green-600/30 bg-green-50 text-green-700";
   }
   if (
     key.includes("sell") ||
@@ -240,38 +293,377 @@ function wallStreetBadgeClass(raw: string | null | undefined) {
     key.includes("underweight") ||
     key.includes("strong_sell")
   ) {
-    return "border-rose-500/40 bg-rose-500/15 text-rose-200";
+    return "border-red-600/30 bg-red-50 text-red-700";
   }
   if (key.includes("hold") || key.includes("neutral")) {
-    return "border-amber-500/35 bg-amber-500/12 text-amber-200";
+    return "border-amber-500/40 bg-amber-50 text-amber-700";
   }
-  return "border-neutral-600/50 bg-neutral-800/70 text-neutral-300";
+  return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
 function directionPanelAccent(mismatch: EarningsMismatch | null | undefined) {
   if (mismatch === "BEAT_LIKELY") {
-    return "border-emerald-500/30 bg-gradient-to-b from-emerald-500/12 via-neutral-950/80 to-neutral-950";
+    return "border-green-600/25 bg-gradient-to-b from-green-50 via-white to-white";
   }
   if (mismatch === "MISS_LIKELY") {
-    return "border-rose-500/30 bg-gradient-to-b from-rose-500/12 via-neutral-950/80 to-neutral-950";
+    return "border-red-600/25 bg-gradient-to-b from-red-50 via-white to-white";
   }
   if (mismatch === "PRICED_IN") {
-    return "border-amber-500/25 bg-gradient-to-b from-sky-500/10 via-amber-500/8 to-neutral-950";
+    return "border-amber-500/30 bg-gradient-to-b from-amber-50 via-white to-white";
   }
-  return "border-neutral-800/80 bg-neutral-900/40";
+  return "border-slate-200 bg-white";
 }
 
 function directionBadgeClass(mismatch: EarningsMismatch | null | undefined) {
   if (mismatch === "MISS_LIKELY") {
-    return "border-rose-400/50 bg-rose-500/20 text-rose-200 shadow-[0_0_18px_rgba(244,63,94,0.16)]";
+    return "border-red-600/40 bg-red-50 text-red-700";
   }
   if (mismatch === "BEAT_LIKELY") {
-    return "border-emerald-400/50 bg-emerald-500/20 text-emerald-200 shadow-[0_0_18px_rgba(16,185,129,0.16)]";
+    return "border-green-600/40 bg-green-50 text-green-700";
   }
   if (mismatch === "PRICED_IN") {
-    return "border-sky-400/40 bg-sky-500/15 text-sky-200";
+    return "border-amber-500/40 bg-amber-50 text-amber-700";
   }
-  return "border-neutral-700 bg-neutral-900 text-neutral-300";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function predictionResultClass(result: SniperPrediction) {
+  if (result === "BEAT") return "text-green-600";
+  if (result === "MISS") return "text-red-600";
+  return "text-slate-400";
+}
+
+function predictionResultLabel(result: SniperPrediction) {
+  if (result === "BEAT") return "BEAT LIKELY";
+  if (result === "MISS") return "MISS LIKELY";
+  return "NO SIGNAL";
+}
+
+function SearchStockMiniChart({
+  data,
+  brandKeys,
+  stockName,
+  brandColors,
+  height = 200,
+  showLegend = false,
+}: {
+  data: ChartPoint[];
+  brandKeys: string[];
+  stockName: string;
+  brandColors: Record<string, string>;
+  height?: number;
+  showLegend?: boolean;
+}) {
+  if (data.length === 0) {
+    return (
+      <div
+        className="flex items-center justify-center text-xs text-slate-400"
+        style={{ height }}
+      >
+        No data in this window.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ height }} className="w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart
+          data={data}
+          margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+          style={{ outline: "none" }}
+        >
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis
+            dataKey="date"
+            type="category"
+            tick={{ fill: AXIS_TICK, fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: AXIS_LINE }}
+            minTickGap={28}
+            allowDuplicatedCategory={false}
+          />
+          <YAxis
+            yAxisId="left"
+            orientation="left"
+            domain={[0, "auto"]}
+            tick={{ fill: AXIS_TICK, fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={36}
+          />
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            domain={["auto", "auto"]}
+            tick={{ fill: AXIS_TICK, fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={40}
+          />
+          <Tooltip
+            shared
+            cursor={{
+              stroke: STOCK_STROKE,
+              strokeWidth: 1,
+              strokeDasharray: "3 3",
+              opacity: 0.35,
+            }}
+            content={(props) => (
+              <CompanyChartTooltip
+                active={props.active}
+                payload={
+                  props.payload as unknown as ChartTooltipProps["payload"]
+                }
+                label={props.label as string | number | undefined}
+              />
+            )}
+            wrapperStyle={{ outline: "none", zIndex: 20 }}
+          />
+          {showLegend && (
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} />
+          )}
+          <Area
+            yAxisId="right"
+            type="monotone"
+            dataKey={STOCK_KEY}
+            name={stockName}
+            stroke={STOCK_STROKE}
+            fill={STOCK_FILL}
+            fillOpacity={0.12}
+            strokeWidth={1.5}
+            connectNulls
+            dot={false}
+            isAnimationActive={false}
+          />
+          {brandKeys.map((brand) => (
+            <Line
+              key={brand}
+              yAxisId="left"
+              type="monotone"
+              dataKey={brand}
+              name={brand}
+              stroke={brandColors[brand] ?? BRAND_COLORS[0]}
+              strokeWidth={2}
+              connectNulls
+              isAnimationActive={false}
+              dot={false}
+              activeDot={false}
+            />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+const QTD_CURRENT_KEY = "currentQtd";
+const QTD_PRIOR_KEY = "priorYearQtd";
+
+type QtdYoYPoint = {
+  label: string;
+  dayOffset: number;
+  [QTD_CURRENT_KEY]: number | null;
+  [QTD_PRIOR_KEY]: number | null;
+};
+
+function averageBrandInterest(
+  row: TrendDatum | ChartPoint,
+  brands: string[]
+): number | null {
+  const vals: number[] = [];
+  for (const brand of brands) {
+    const v = row[brand];
+    if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
+  }
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+const QTD_LOOKBACK_DAYS = 90;
+
+/**
+ * Anchor QTD chart to the next earnings date (Yahoo Facts).
+ * X-axis: (nextEarnings − 90d) → nextEarnings.
+ * Search values are filled through today; dates after today stay null so
+ * Recharts leaves a blank countdown gap until the print.
+ */
+function buildQtdYoYOverlayData(
+  trendRows: TrendDatum[],
+  brands: string[],
+  nextEarningsIso: string | null | undefined,
+  asOf: Date = new Date()
+): QtdYoYPoint[] {
+  if (brands.length === 0) return [];
+
+  const MS_DAY = 24 * 60 * 60 * 1000;
+  const earningsDate =
+    nextEarningsIso && nextEarningsIso !== "N/A"
+      ? parseIsoDateLocal(nextEarningsIso)
+      : null;
+
+  // Fallback when earnings date is unknown: 90d window ending today.
+  const windowEnd = earningsDate ?? new Date(
+    asOf.getFullYear(),
+    asOf.getMonth(),
+    asOf.getDate(),
+    12,
+    0,
+    0,
+    0
+  );
+  const windowStart = new Date(windowEnd.getTime() - QTD_LOOKBACK_DAYS * MS_DAY);
+  windowStart.setHours(12, 0, 0, 0);
+
+  const todayMs = new Date(
+    asOf.getFullYear(),
+    asOf.getMonth(),
+    asOf.getDate(),
+    23,
+    59,
+    59,
+    999
+  ).getTime();
+
+  const interestByDate = new Map<string, number>();
+  for (const row of trendRows) {
+    const date = normalizeDateString(String(row.date));
+    const interest = averageBrandInterest(row, brands);
+    if (interest == null) continue;
+    interestByDate.set(date, Math.round(interest * 10) / 10);
+  }
+
+  /** Nearest available weekly print on or before `iso`, within 10 days. */
+  const lookupOnOrBefore = (iso: string): number | null => {
+    if (interestByDate.has(iso)) return interestByDate.get(iso)!;
+    const target = new Date(`${iso}T12:00:00`).getTime();
+    let best: { date: string; value: number } | null = null;
+    for (const [date, value] of interestByDate) {
+      const t = new Date(`${date}T12:00:00`).getTime();
+      if (t > target) continue;
+      if (target - t > 10 * MS_DAY) continue;
+      if (!best || date > best.date) best = { date, value };
+    }
+    return best?.value ?? null;
+  };
+
+  const points: QtdYoYPoint[] = [];
+  const startMs = windowStart.getTime();
+  const endMs = windowEnd.getTime();
+
+  for (let t = startMs; t <= endMs; t += MS_DAY) {
+    const noon = new Date(t);
+    noon.setHours(12, 0, 0, 0);
+    const label = toIsoDateLocal(noon.getTime());
+    const dayOffset = Math.round((noon.getTime() - startMs) / MS_DAY);
+    const isFuture = noon.getTime() > todayMs;
+
+    if (isFuture) {
+      points.push({
+        dayOffset,
+        label,
+        [QTD_CURRENT_KEY]: null,
+        [QTD_PRIOR_KEY]: null,
+      });
+      continue;
+    }
+
+    const priorLabel = toIsoDateLocal(noon.getTime() - YOY_LAG_DAYS * MS_DAY);
+    points.push({
+      dayOffset,
+      label,
+      [QTD_CURRENT_KEY]: lookupOnOrBefore(label),
+      [QTD_PRIOR_KEY]: lookupOnOrBefore(priorLabel),
+    });
+  }
+
+  return points;
+}
+
+function QtdYoYOverlayChart({
+  data,
+  height = 220,
+}: {
+  data: QtdYoYPoint[];
+  height?: number;
+}) {
+  if (data.length === 0) {
+    return (
+      <div
+        className="flex items-center justify-center text-xs text-slate-400"
+        style={{ height }}
+      >
+        No QTD search data in this window.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ height }} className="w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart
+          data={data}
+          margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+          style={{ outline: "none" }}
+        >
+          <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+          <XAxis
+            dataKey="label"
+            type="category"
+            tick={{ fill: AXIS_TICK, fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: AXIS_LINE }}
+            minTickGap={28}
+            allowDuplicatedCategory={false}
+          />
+          <YAxis
+            domain={[0, "auto"]}
+            tick={{ fill: AXIS_TICK, fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={36}
+          />
+          <Tooltip
+            shared
+            cursor={{
+              stroke: STOCK_STROKE,
+              strokeWidth: 1,
+              strokeDasharray: "3 3",
+              opacity: 0.35,
+            }}
+            contentStyle={{
+              borderRadius: 8,
+              border: "1px solid #e2e8f0",
+              fontSize: 12,
+            }}
+            wrapperStyle={{ outline: "none", zIndex: 20 }}
+          />
+          <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} />
+          <Line
+            type="monotone"
+            dataKey={QTD_CURRENT_KEY}
+            name="Current QTD Search"
+            stroke="#1d4ed8"
+            strokeWidth={2.5}
+            connectNulls
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey={QTD_PRIOR_KEY}
+            name="Prior Year QTD Search"
+            stroke="#94a3b8"
+            strokeWidth={2}
+            strokeDasharray="6 4"
+            connectNulls
+            dot={false}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 export default function CompanyTerminal({
@@ -281,34 +673,43 @@ export default function CompanyTerminal({
   parent: ParentCompany;
   initialInsight?: CompanyBrief | null;
 }) {
-  const [timeframe, setTimeframe] = useState<Timeframe>("1Y");
-  /** Default all child brands on so search lines + left Y-axis have series. */
-  const [activeBrands, setActiveBrands] = useState<string[]>(() => [
-    ...parent.childBrands,
-  ]);
+  const [timeframe, setTimeframe] = useState<Timeframe>("5Y");
+  /** Stock-only by default — user toggles child brands on deliberately. */
+  const [activeBrands, setActiveBrands] = useState<string[]>([]);
   const [trendRows, setTrendRows] = useState<TrendDatum[]>([]);
   const [stockMap, setStockMap] = useState<Map<string, number>>(new Map());
   const [lastPrice, setLastPrice] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fundamentals, setFundamentals] = useState<FundamentalsState | null>(
+    null
+  );
 
   const [insight] = useState<CompanyBrief | null>(initialInsight);
   const [studies, setStudies] = useState<
     { brand: string; result: EventStudyResult }[]
   >([]);
 
+  const tickerEstimates = useMemo(() => {
+    const rows = ESTIMATES[parent.ticker] ?? [];
+    return sortByDateAsc(rows).reverse(); // newest first for UI
+  }, [parent.ticker]);
+
   useEffect(() => {
-    setActiveBrands([...parent.childBrands]);
-  }, [parent.ticker, parent.childBrands]);
+    setActiveBrands([]);
+  }, [parent.ticker]);
 
   const loadMarket = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [trends, financeRes] = await Promise.all([
+      const [trends, financeRes, fundamentalsRes] = await Promise.all([
         getTrendData(parent.childBrands),
         fetch(
           `/api/finance?ticker=${encodeURIComponent(parent.ticker)}&timeframe=5Y`
+        ),
+        fetch(
+          `/api/fundamentals?ticker=${encodeURIComponent(parent.ticker)}`
         ),
       ]);
 
@@ -330,6 +731,24 @@ export default function CompanyTerminal({
       const dates = [...map.keys()].sort();
       const latest = dates.at(-1);
       setLastPrice(latest ? (map.get(latest) ?? null) : null);
+
+      if (fundamentalsRes.ok) {
+        const f = (await fundamentalsRes.json()) as FundamentalsState & {
+          error?: string;
+          lastPrice?: number | null;
+        };
+        setFundamentals({
+          trailingPE: f.trailingPE ?? "N/A",
+          forwardPE: f.forwardPE ?? "N/A",
+          nextEarnings: f.nextEarnings ?? "N/A",
+          recommendationKey: f.recommendationKey ?? "N/A",
+        });
+        if (f.lastPrice != null && Number.isFinite(f.lastPrice)) {
+          setLastPrice(f.lastPrice);
+        }
+      } else {
+        setFundamentals(null);
+      }
 
       // Local event-study markers only (no live Gemini).
       const merged = mergeStockPrices(trends, map, STOCK_KEY);
@@ -367,6 +786,14 @@ export default function CompanyTerminal({
     return matched.length > 0 ? matched : activeBrands;
   }, [trendRows, activeBrands]);
 
+  const brandColorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    parent.childBrands.forEach((brand, i) => {
+      map[brand] = BRAND_COLORS[i % BRAND_COLORS.length];
+    });
+    return map;
+  }, [parent.childBrands]);
+
   /** Dense weekly base series (no catalyst scatter). */
   const baseChartData = useMemo(() => {
     const merged = mergeStockPrices(trendRows, stockMap, STOCK_KEY);
@@ -386,6 +813,30 @@ export default function CompanyTerminal({
       )
     );
   }, [trendRows, stockMap, timeframe, chartBrandKeys]);
+
+  /**
+   * Full 5Y-aligned series for quarter windows / this-quarter slice
+   * (independent of the macro timeframe toggle).
+   */
+  const fullAlignedData = useMemo(() => {
+    const merged = mergeStockPrices(trendRows, stockMap, STOCK_KEY);
+    const windowed = filterByTimeframe(merged, "5Y");
+    const aligned = groupAndAlignChartData(
+      windowed,
+      chartBrandKeys,
+      [STOCK_KEY]
+    );
+    return sortByDateAsc(
+      aligned.map(
+        (row): ChartPoint => ({
+          ...row,
+          date: normalizeDateString(String(row.date)),
+          catalyst: null,
+          catalysts: [],
+        })
+      )
+    );
+  }, [trendRows, stockMap, chartBrandKeys]);
 
   /**
    * Single continuous timeline for Recharts: inject catalyst metadata onto
@@ -435,10 +886,44 @@ export default function CompanyTerminal({
     });
   }, [baseChartData, studies, activeBrands]);
 
+  const qtdYoYOverlayData = useMemo(() => {
+    const brands =
+      chartBrandKeys.length > 0 ? chartBrandKeys : parent.childBrands;
+    const nextEarnings =
+      fundamentals?.nextEarnings && fundamentals.nextEarnings !== "N/A"
+        ? fundamentals.nextEarnings
+        : null;
+    return buildQtdYoYOverlayData(trendRows, brands, nextEarnings);
+  }, [
+    chartBrandKeys,
+    fundamentals?.nextEarnings,
+    parent.childBrands,
+    trendRows,
+  ]);
+
+  /** Historical ledger: post-2024 Sniper grades when |Δ| ≥ 15. */
+  const predictionHistoryRows = useMemo(
+    () =>
+      buildSniperLedgerRows(tickerEstimates, trendRows, parent.childBrands, {
+        minDate: SNIPER_LEDGER_MIN_DATE,
+      }),
+    [parent.childBrands, tickerEstimates, trendRows]
+  );
+
+  const sniperAccuracy = useMemo(
+    () => calculateHistoricalSniperAccuracy(predictionHistoryRows),
+    [predictionHistoryRows]
+  );
+
   const catalystCount = useMemo(
     () => chartData.reduce((n, row) => n + (row.catalysts?.length ?? 0), 0),
     [chartData]
   );
+
+  const streetConsensus =
+    insight?.wallStreetConsensus?.trim() ||
+    fundamentals?.recommendationKey ||
+    null;
 
   const chartContext = useMemo((): ChartContext => {
     const briefingParts: string[] = [];
@@ -507,38 +992,54 @@ export default function CompanyTerminal({
   const toggleBrand = (brand: string) => {
     setActiveBrands((prev) => {
       if (prev.includes(brand)) {
-        if (prev.length === 1) return prev;
         return prev.filter((b) => b !== brand);
       }
       return [...prev, brand];
     });
   };
 
+  const peLabel =
+    fundamentals?.trailingPE && fundamentals.trailingPE !== "N/A"
+      ? fundamentals.trailingPE
+      : fundamentals?.forwardPE && fundamentals.forwardPE !== "N/A"
+        ? fundamentals.forwardPE
+        : "N/A";
+
+  const today = new Date().toISOString().split("T")[0];
+  const nextEarningsDate =
+    fundamentals?.nextEarnings && fundamentals.nextEarnings !== "N/A"
+      ? fundamentals.nextEarnings.slice(0, 10)
+      : null;
+  const showStaleEarningsBanner = Boolean(
+    nextEarningsDate && nextEarningsDate < today
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-slate-900">
+      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <Link
             href="/"
-            className="mb-3 inline-flex items-center gap-1.5 text-xs text-neutral-500 transition hover:text-neutral-300"
+            className="mb-3 inline-flex items-center gap-1.5 text-xs text-slate-500 transition hover:text-blue-800"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Alpha Feed
+            Main Feed
           </Link>
           <div className="flex flex-wrap items-end gap-3">
-            <h2 className="text-2xl font-semibold tracking-tight text-neutral-50 sm:text-3xl">
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
               {parent.name}
             </h2>
-            <span className="mb-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 font-mono text-sm font-semibold text-indigo-300">
+            <span className="mb-1 rounded-md border border-blue-700/25 bg-blue-50 px-2.5 py-1 font-mono text-sm font-semibold text-blue-800">
               ${parent.ticker}
             </span>
             {lastPrice != null && (
-              <span className="mb-1 font-mono text-lg text-neutral-200">
+              <span className="mb-1 font-mono text-lg text-slate-800">
                 {formatUsd(lastPrice)}
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-neutral-500">
+          <p className="mt-1 text-sm text-slate-500">
             {parent.childBrands.length} child brands — toggle below to overlay
             search interest
           </p>
@@ -552,45 +1053,52 @@ export default function CompanyTerminal({
               onClick={() => setTimeframe(tf)}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
                 timeframe === tf
-                  ? "bg-neutral-100 text-neutral-900"
-                  : "border border-neutral-700 text-neutral-400 hover:bg-neutral-900"
+                  ? "bg-blue-800 text-white"
+                  : "border border-slate-200 text-slate-600 hover:bg-slate-50"
               }`}
             >
               {tf}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={() => void loadMarket()}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-400 hover:bg-neutral-900 disabled:opacity-40"
-          >
-            {loading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Refresh
-          </button>
         </div>
       </div>
 
+      {showStaleEarningsBanner && (
+        <div
+          role="status"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-800"
+        >
+          ⚠️ Pending Data Update: This company recently reported earnings. We
+          are waiting on Yahoo Finance to update the consensus estimates for the
+          upcoming quarter.
+        </div>
+      )}
+
       {error && (
-        <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+        <p className="rounded-lg border border-red-600/30 bg-red-50 px-3 py-2 text-xs text-red-700">
           {error}
         </p>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
-        <section className="rounded-xl border border-neutral-800/80 bg-neutral-900/40 p-4 sm:p-5">
-          <div className="mb-4 h-[380px] w-full sm:h-[440px]">
+      {/* Top row: Macro Chart | Yahoo Facts */}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-slate-900">
+              Macro Chart
+            </h3>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Search vs Stock · {timeframe}
+            </p>
+          </div>
+          <div className="mb-4 h-[340px] w-full sm:h-[400px]">
             {loading && chartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin text-indigo-400" />
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin text-blue-700" />
                 Loading chart…
               </div>
             ) : chartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
                 No trend data for these child brands yet.
               </div>
             ) : (
@@ -602,13 +1110,13 @@ export default function CompanyTerminal({
                     className="outline-none focus:outline-none"
                     style={{ outline: "none" }}
                   >
-                    <CartesianGrid stroke="#262626" strokeDasharray="3 3" />
+                    <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
                     <XAxis
                       dataKey="date"
                       type="category"
-                      tick={{ fill: "#737373", fontSize: 11 }}
+                      tick={{ fill: AXIS_TICK, fontSize: 11 }}
                       tickLine={false}
-                      axisLine={{ stroke: "#404040" }}
+                      axisLine={{ stroke: AXIS_LINE }}
                       minTickGap={40}
                       allowDuplicatedCategory={false}
                     />
@@ -617,7 +1125,7 @@ export default function CompanyTerminal({
                       orientation="left"
                       domain={[0, "auto"]}
                       allowDataOverflow={false}
-                      tick={{ fill: "#737373", fontSize: 11 }}
+                      tick={{ fill: AXIS_TICK, fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
                       width={40}
@@ -625,7 +1133,7 @@ export default function CompanyTerminal({
                         value: "Search",
                         angle: -90,
                         position: "insideLeft",
-                        fill: "#525252",
+                        fill: "#94a3b8",
                         fontSize: 10,
                       }}
                     />
@@ -633,7 +1141,7 @@ export default function CompanyTerminal({
                       yAxisId="right"
                       orientation="right"
                       domain={["auto", "auto"]}
-                      tick={{ fill: "#737373", fontSize: 11 }}
+                      tick={{ fill: AXIS_TICK, fontSize: 11 }}
                       tickLine={false}
                       axisLine={false}
                       width={48}
@@ -641,17 +1149,17 @@ export default function CompanyTerminal({
                         value: "Price",
                         angle: 90,
                         position: "insideRight",
-                        fill: "#525252",
+                        fill: "#94a3b8",
                         fontSize: 10,
                       }}
                     />
                     <Tooltip
                       shared
                       cursor={{
-                        stroke: "#ffffff",
+                        stroke: STOCK_STROKE,
                         strokeWidth: 1,
                         strokeDasharray: "3 3",
-                        opacity: 0.3,
+                        opacity: 0.35,
                       }}
                       content={(props) => (
                         <CompanyChartTooltip
@@ -670,8 +1178,8 @@ export default function CompanyTerminal({
                       type="monotone"
                       dataKey={STOCK_KEY}
                       name={`${parent.ticker} price`}
-                      stroke="#6366f1"
-                      fill="#6366f1"
+                      stroke={STOCK_STROKE}
+                      fill={STOCK_FILL}
                       fillOpacity={0.12}
                       strokeWidth={1.5}
                       connectNulls
@@ -684,28 +1192,30 @@ export default function CompanyTerminal({
                         parent.childBrands.indexOf(brand)
                       );
                       return (
-                      <Line
-                        key={brand}
-                        yAxisId="left"
-                        type="monotone"
-                        dataKey={brand}
-                        name={brand}
-                        stroke={
-                          BRAND_COLORS[colorIdx % BRAND_COLORS.length]
-                        }
-                        strokeWidth={2}
-                        connectNulls
-                        isAnimationActive={false}
-                        dot={(dotProps) => (
-                          <CustomCatalystDot
-                            cx={dotProps.cx}
-                            cy={dotProps.cy}
-                            payload={dotProps.payload as ChartPoint | undefined}
-                            dataKey={brand}
-                          />
-                        )}
-                        activeDot={false}
-                      />
+                        <Line
+                          key={brand}
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey={brand}
+                          name={brand}
+                          stroke={
+                            BRAND_COLORS[colorIdx % BRAND_COLORS.length]
+                          }
+                          strokeWidth={2}
+                          connectNulls
+                          isAnimationActive={false}
+                          dot={(dotProps) => (
+                            <CustomCatalystDot
+                              cx={dotProps.cx}
+                              cy={dotProps.cy}
+                              payload={
+                                dotProps.payload as ChartPoint | undefined
+                              }
+                              dataKey={brand}
+                            />
+                          )}
+                          activeDot={false}
+                        />
                       );
                     })}
                   </ComposedChart>
@@ -715,14 +1225,14 @@ export default function CompanyTerminal({
           </div>
 
           {catalystCount > 0 && (
-            <p className="mb-3 text-[10px] text-neutral-600">
-              Glowing dots mark event-study catalysts on the continuous weekly
-              timeline — hover any date for the explanation.
+            <p className="mb-3 text-[10px] text-slate-400">
+              Markers show event-study catalysts on the weekly timeline — hover
+              any date for the explanation.
             </p>
           )}
 
-          <div className="border-t border-neutral-800/80 pt-4">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+          <div className="border-t border-slate-200 pt-4">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Child brand toggles
             </p>
             <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
@@ -734,10 +1244,10 @@ export default function CompanyTerminal({
                     key={brand}
                     type="button"
                     onClick={() => toggleBrand(brand)}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                    className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
                       on
-                        ? "border-transparent text-neutral-950"
-                        : "border-neutral-700 bg-transparent text-neutral-400 hover:border-neutral-500"
+                        ? "border-transparent text-white"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
                     }`}
                     style={on ? { backgroundColor: color } : undefined}
                   >
@@ -749,29 +1259,99 @@ export default function CompanyTerminal({
           </div>
         </section>
 
+        <aside className="flex flex-col rounded-xl border border-slate-200 bg-white p-5">
+          <div className="mb-4">
+            <h3 className="text-base font-semibold tracking-tight text-slate-900">
+              Yahoo Facts
+            </h3>
+            <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+              Live fundamentals · ${parent.ticker}
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                P/E (Trailing)
+              </p>
+              <p className="mt-1 font-mono text-2xl font-semibold tabular-nums text-slate-900">
+                {peLabel}
+              </p>
+              {fundamentals?.forwardPE &&
+                fundamentals.forwardPE !== "N/A" &&
+                fundamentals.forwardPE !== peLabel && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Forward {fundamentals.forwardPE}
+                  </p>
+                )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Next Earnings
+              </p>
+              <p className="mt-1 font-mono text-xl font-semibold tabular-nums text-slate-900">
+                {fundamentals?.nextEarnings ?? "—"}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Wall Street Consensus
+              </p>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${wallStreetBadgeClass(streetConsensus)}`}
+              >
+                <Scale className="h-3 w-3 opacity-80" />
+                {formatWallStreetConsensus(streetConsensus)}
+              </span>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {/* Middle row: QTD YoY overlay | Prediction / AI Explanation */}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,1fr)]">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-slate-900">
+              Quarter-To-Date (QTD)
+            </h3>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              {fundamentals?.nextEarnings &&
+              fundamentals.nextEarnings !== "N/A"
+                ? `90d → earnings ${fundamentals.nextEarnings}`
+                : "Current vs prior-year search"}
+            </p>
+          </div>
+          <QtdYoYOverlayChart data={qtdYoYOverlayData} height={220} />
+        </section>
+
         <aside
           className={`flex flex-col rounded-xl border p-5 ${directionPanelAccent(insight?.earningsMismatch)}`}
         >
-          <div className="mb-5 flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/30">
-              <Bot className="h-5 w-5 text-cyan-300" />
+          <div className="mb-4 flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 ring-1 ring-inset ring-blue-700/20">
+              <Bot className="h-5 w-5 text-blue-800" />
             </div>
             <div>
-              <h3 className="text-base font-semibold tracking-tight text-neutral-50">
-                Asset Profile
+              <h3 className="text-base font-semibold tracking-tight text-slate-900">
+                Prediction / AI Explanation
               </h3>
-              <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
                 Earnings Whisper · ${parent.ticker}
               </p>
             </div>
           </div>
 
-          {insight?.found && insight.hasAssetProfile ? (
+          {insight?.found &&
+          (insight.hasAssetProfile ||
+            insight.terminalVerdict ||
+            insight.earningsMismatch) ? (
             <div className="space-y-4">
-              {/* The Delta — Bloomberg-style mismatch block */}
-              <section className="rounded-lg border border-neutral-700/70 bg-neutral-950/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+              <section className="rounded-lg border border-slate-200 bg-white/80 p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400/90">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-800">
                     The Delta
                   </p>
                   {insight.earningsMismatch && (
@@ -783,158 +1363,142 @@ export default function CompanyTerminal({
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-neutral-800 bg-neutral-800">
-                  <div className="bg-neutral-950 px-3 py-4">
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200">
+                  <div className="bg-white px-3 py-4">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       Wall Street Rev Est
                     </p>
-                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-neutral-50">
-                      {formatExpectedRevenueGrowth(insight.expectedRevenueGrowth)}
-                    </p>
-                    <p className="mt-1 text-[10px] text-neutral-600">
-                      Current quarter (+0q)
+                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-slate-900">
+                      {formatExpectedRevenueGrowth(
+                        insight.expectedRevenueGrowth
+                      )}
                     </p>
                   </div>
-                  <div className="bg-neutral-950 px-3 py-4">
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  <div className="bg-white px-3 py-4">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       YoY Search Growth
                     </p>
-                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-neutral-50">
+                    <p className="mt-2 font-mono text-xl font-semibold tabular-nums tracking-tight text-slate-900">
                       {formatSearchGrowthPct(insight.momentumPct)}
                     </p>
-                    <p className="mt-1 text-[10px] text-neutral-600">
-                      Sanitized 4w MA YoY
-                    </p>
                   </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-800 pt-3">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                    Street rating
-                  </span>
-                  <span
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${wallStreetBadgeClass(insight.wallStreetConsensus)}`}
-                  >
-                    <Scale className="h-3 w-3 opacity-80" />
-                    {formatWallStreetConsensus(insight.wallStreetConsensus)}
-                  </span>
                 </div>
               </section>
 
-              {/* Terminal verdict */}
-              <section className="rounded-lg border border-neutral-700/70 bg-neutral-950/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400/90">
+              <section className="rounded-lg border border-slate-200 bg-white/80 p-4">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-800">
                   Terminal Verdict
                 </p>
-                <p className="text-[15px] font-semibold leading-snug tracking-tight text-neutral-50">
-                  {insight.terminalVerdict}
+                <p className="text-[15px] font-semibold leading-snug tracking-tight text-slate-900">
+                  {formatVerdictText(
+                    insight.terminalVerdict ?? insight.heroText
+                  )}
                 </p>
               </section>
-
-              {/* Intelligence grid */}
-              <div className="grid gap-3">
-                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Target className="h-3.5 w-3.5 text-violet-300" />
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-300/90">
-                      Strategy Profile
-                    </p>
-                  </div>
-                  <p className="text-sm leading-relaxed text-neutral-200">
-                    {insight.strategyProfile ?? "Profile unavailable."}
-                  </p>
-                </section>
-
-                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Newspaper className="h-3.5 w-3.5 text-amber-300" />
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/90">
-                      The Buzz
-                    </p>
-                  </div>
-                  <p className="text-sm leading-relaxed text-neutral-200">
-                    {insight.theBuzz ?? "No catalyst logged yet."}
-                  </p>
-                </section>
-
-                <section className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3.5">
-                  <div className="mb-2 flex items-center gap-2">
-                    <ShieldAlert className="h-3.5 w-3.5 text-rose-300" />
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-300/90">
-                      The Risk
-                    </p>
-                  </div>
-                  <p className="text-sm leading-relaxed text-neutral-200">
-                    {insight.theRisk ?? "Risk assessment unavailable."}
-                  </p>
-                </section>
-              </div>
-
-              {insight.brand && insight.brand !== parent.name && (
-                <p className="text-[11px] text-neutral-500">
-                  Child signals:{" "}
-                  <span className="text-neutral-400">{insight.brand}</span>
-                </p>
-              )}
-
-              {insight.generatedAt && (
-                <p className="pt-1 text-[10px] uppercase tracking-wider text-neutral-600">
-                  Cached{" "}
-                  {new Date(insight.generatedAt).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
-                </p>
-              )}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-neutral-700/80 bg-neutral-950/40 px-4 py-8 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                Asset Profile
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Prediction
               </p>
-              <p className="mt-2 text-sm leading-relaxed text-neutral-400">
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">
                 {INSIGHT_GENERATING_FALLBACK}
               </p>
             </div>
           )}
-
-          {studies.length > 0 && (
-            <div className="mt-5 max-h-40 space-y-2 overflow-y-auto border-t border-neutral-800 pt-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                Event study snapshot
-              </p>
-              {studies.map(({ brand, result }) => (
-                <div
-                  key={brand}
-                  className="rounded-lg border border-neutral-800 bg-neutral-950/50 px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-neutral-200">
-                      {brand}
-                    </span>
-                    <span
-                      className={`font-mono text-[11px] ${
-                        result.averageReturnPct >= 0
-                          ? "text-emerald-400"
-                          : "text-rose-400"
-                      }`}
-                    >
-                      {result.averageReturnPct >= 0 ? "+" : ""}
-                      {result.averageReturnPct.toFixed(1)}% avg
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-neutral-600">
-                    {result.eventCount} spikes · {result.positiveEventCount} pos
-                    / {result.negativeEventCount} neg
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <CompanyChat chartContext={chartContext} ticker={parent.ticker} />
         </aside>
       </div>
+
+      {/* Historical Sniper — sits between AI Explanation and Prediction History */}
+      <aside className="rounded-xl border border-slate-200 bg-white p-5">
+        <h3 className="text-sm font-semibold tracking-tight text-slate-900">
+          Historical Sniper
+        </h3>
+        <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
+          {sniperAccuracy.label}
+        </p>
+        <p className="mt-2 text-[11px] leading-snug text-slate-500">
+          Measures our algorithm&apos;s win rate on high-conviction historical
+          setups.
+        </p>
+      </aside>
+
+      {/* Bottom: Prediction History (Sniper ledger) */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+        <h3 className="mb-4 text-sm font-semibold tracking-tight text-slate-900">
+          Prediction History
+        </h3>
+        {predictionHistoryRows.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No historical estimates for this ticker.
+          </p>
+        ) : (
+          <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200">
+            <table className="w-full min-w-[620px] border-collapse text-left text-xs">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr className="border-b border-slate-200 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  <th className="px-3 py-2 font-semibold">Date</th>
+                  <th className="px-3 py-2 font-semibold">Wall St Est</th>
+                  <th className="px-3 py-2 font-semibold">Actual Revenue</th>
+                  <th className="px-3 py-2 font-semibold">Search YoY</th>
+                  <th className="px-3 py-2 font-semibold">Our Prediction</th>
+                  <th className="px-3 py-2 font-semibold">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {predictionHistoryRows.map((row) => (
+                  <tr
+                    key={row.date}
+                    className="border-b border-slate-100 last:border-0"
+                  >
+                    <td className="px-3 py-2 font-mono text-slate-700">
+                      {row.date}
+                    </td>
+                    <td className="px-3 py-2 font-mono tabular-nums text-slate-800">
+                      {formatGrowthPct(row.estimated)}
+                    </td>
+                    <td className="px-3 py-2 font-mono tabular-nums text-slate-800">
+                      {formatGrowthPct(row.actual)}
+                    </td>
+                    <td className="px-3 py-2 font-mono tabular-nums text-slate-800">
+                      {row.searchYoY != null
+                        ? formatGrowthPct(row.searchYoY)
+                        : "—"}
+                    </td>
+                    <td
+                      className={`px-3 py-2 font-semibold ${
+                        row.prediction
+                          ? predictionResultClass(row.prediction)
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {row.prediction
+                        ? predictionResultLabel(row.prediction)
+                        : "—"}
+                    </td>
+                    <td
+                      className={`px-3 py-2 font-semibold ${
+                        row.accuracy.correct === true
+                          ? "text-green-600"
+                          : row.accuracy.correct === false
+                            ? "text-red-600"
+                            : "text-slate-400"
+                      }`}
+                    >
+                      {row.accuracy.label || "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Chat */}
+      <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+        <CompanyChat chartContext={chartContext} ticker={parent.ticker} />
+      </section>
     </div>
   );
 }

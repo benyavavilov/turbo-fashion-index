@@ -57,13 +57,6 @@ export const parentCompanies: ParentCompany[] = [
     domain: "urbanoutfitters.com",
   },
   {
-    name: "Gap Inc",
-    // Yahoo Finance lists Gap as GAP (legacy GPS symbol no longer resolves).
-    ticker: "GAP",
-    childBrands: ["Gap", "Old Navy", "Athleta", "Banana Republic"],
-    domain: "gap.com",
-  },
-  {
     name: "Levi Strauss & Co",
     ticker: "LEVI",
     childBrands: ["Levi's", "Dockers", "Beyond Yoga"],
@@ -74,12 +67,6 @@ export const parentCompanies: ParentCompany[] = [
     ticker: "BOOT",
     childBrands: ["Boot Barn"],
     domain: "bootbarn.com",
-  },
-  {
-    name: "On Holding",
-    ticker: "ONON",
-    childBrands: ["On Running"],
-    domain: "on-running.com",
   },
   {
     name: "American Eagle",
@@ -94,16 +81,64 @@ export const parentCompanies: ParentCompany[] = [
     domain: "tapestry.com",
   },
   {
-    name: "E.l.f. Beauty",
-    ticker: "ELF",
-    childBrands: ["elf cosmetics"],
-    domain: "elfcosmetics.com",
-  },
-  {
     name: "Canada Goose",
     ticker: "GOOS",
     childBrands: ["Canada Goose"],
     domain: "canadagoose.com",
+  },
+  {
+    name: "Yeti Holdings",
+    ticker: "YETI",
+    childBrands: ["Yeti"],
+    domain: "yeti.com",
+  },
+  {
+    name: "Revolve Group",
+    ticker: "RVLV",
+    childBrands: ["Revolve"],
+    domain: "revolve.com",
+  },
+  {
+    name: "FIGS",
+    ticker: "FIGS",
+    childBrands: ["FIGS"],
+    domain: "wearfigs.com",
+  },
+  {
+    name: "Warby Parker",
+    ticker: "WRBY",
+    childBrands: ["Warby Parker"],
+    domain: "warbyparker.com",
+  },
+  {
+    name: "Chewy",
+    ticker: "CHWY",
+    childBrands: ["Chewy"],
+    domain: "chewy.com",
+  },
+  {
+    name: "Wayfair",
+    ticker: "W",
+    childBrands: ["Wayfair"],
+    domain: "wayfair.com",
+  },
+  {
+    name: "Peloton",
+    ticker: "PTON",
+    childBrands: ["Peloton"],
+    domain: "onepeloton.com",
+  },
+  {
+    name: "Ulta Beauty",
+    ticker: "ULTA",
+    childBrands: ["Ulta Beauty"],
+    domain: "ulta.com",
+  },
+  {
+    name: "Tractor Supply",
+    ticker: "TSCO",
+    childBrands: ["Tractor Supply"],
+    domain: "tractorsupply.com",
   },
 ];
 
