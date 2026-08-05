@@ -467,17 +467,22 @@ type QtdYoYPoint = {
   [QTD_PRIOR_KEY]: number | null;
 };
 
-function averageBrandInterest(
+/** Sum search interest across brands for one trend row (null if none present). */
+function sumBrandInterest(
   row: TrendDatum | ChartPoint,
   brands: string[]
 ): number | null {
-  const vals: number[] = [];
+  let sum = 0;
+  let count = 0;
   for (const brand of brands) {
     const v = row[brand];
-    if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
+    if (typeof v === "number" && Number.isFinite(v)) {
+      sum += v;
+      count += 1;
+    }
   }
-  if (vals.length === 0) return null;
-  return vals.reduce((a, b) => a + b, 0) / vals.length;
+  if (count === 0) return null;
+  return Math.round(sum * 10) / 10;
 }
 
 const QTD_LOOKBACK_DAYS = 90;
@@ -485,8 +490,10 @@ const QTD_LOOKBACK_DAYS = 90;
 /**
  * Anchor QTD chart to the next earnings date (Yahoo Facts).
  * X-axis: (nextEarnings − 90d) → nextEarnings.
- * Search values are filled through today; dates after today stay null so
- * Recharts leaves a blank countdown gap until the print.
+ * Current series: summed active (or all) child-brand search through today;
+ * dates after today stay null (countdown blank).
+ * Prior-year series: same sum, with LOCF so the dotted line runs to the
+ * right edge of the chart.
  */
 function buildQtdYoYOverlayData(
   trendRows: TrendDatum[],
@@ -503,15 +510,17 @@ function buildQtdYoYOverlayData(
       : null;
 
   // Fallback when earnings date is unknown: 90d window ending today.
-  const windowEnd = earningsDate ?? new Date(
-    asOf.getFullYear(),
-    asOf.getMonth(),
-    asOf.getDate(),
-    12,
-    0,
-    0,
-    0
-  );
+  const windowEnd =
+    earningsDate ??
+    new Date(
+      asOf.getFullYear(),
+      asOf.getMonth(),
+      asOf.getDate(),
+      12,
+      0,
+      0,
+      0
+    );
   const windowStart = new Date(windowEnd.getTime() - QTD_LOOKBACK_DAYS * MS_DAY);
   windowStart.setHours(12, 0, 0, 0);
 
@@ -525,15 +534,16 @@ function buildQtdYoYOverlayData(
     999
   ).getTime();
 
+  /** date → summed interest across selected brands */
   const interestByDate = new Map<string, number>();
   for (const row of trendRows) {
     const date = normalizeDateString(String(row.date));
-    const interest = averageBrandInterest(row, brands);
+    const interest = sumBrandInterest(row, brands);
     if (interest == null) continue;
-    interestByDate.set(date, Math.round(interest * 10) / 10);
+    interestByDate.set(date, interest);
   }
 
-  /** Nearest available weekly print on or before `iso`, within 10 days. */
+  /** Exact date hit, else nearest weekly print on or before `iso` (≤10d). */
   const lookupOnOrBefore = (iso: string): number | null => {
     if (interestByDate.has(iso)) return interestByDate.get(iso)!;
     const target = new Date(`${iso}T12:00:00`).getTime();
@@ -550,6 +560,7 @@ function buildQtdYoYOverlayData(
   const points: QtdYoYPoint[] = [];
   const startMs = windowStart.getTime();
   const endMs = windowEnd.getTime();
+  let lastPriorSum: number | null = null;
 
   for (let t = startMs; t <= endMs; t += MS_DAY) {
     const noon = new Date(t);
@@ -558,22 +569,17 @@ function buildQtdYoYOverlayData(
     const dayOffset = Math.round((noon.getTime() - startMs) / MS_DAY);
     const isFuture = noon.getTime() > todayMs;
 
-    if (isFuture) {
-      points.push({
-        dayOffset,
-        label,
-        [QTD_CURRENT_KEY]: null,
-        [QTD_PRIOR_KEY]: null,
-      });
-      continue;
-    }
-
     const priorLabel = toIsoDateLocal(noon.getTime() - YOY_LAG_DAYS * MS_DAY);
+    const priorRaw = lookupOnOrBefore(priorLabel);
+    if (priorRaw != null) lastPriorSum = priorRaw;
+    // LOCF: carry last known prior-year sum through gaps and to chart end.
+    const priorValue = priorRaw ?? lastPriorSum;
+
     points.push({
       dayOffset,
       label,
-      [QTD_CURRENT_KEY]: lookupOnOrBefore(label),
-      [QTD_PRIOR_KEY]: lookupOnOrBefore(priorLabel),
+      [QTD_CURRENT_KEY]: isFuture ? null : lookupOnOrBefore(label),
+      [QTD_PRIOR_KEY]: priorValue,
     });
   }
 
@@ -666,12 +672,92 @@ function QtdYoYOverlayChart({
   );
 }
 
+export type CompanyNewsArticle = {
+  uuid: string;
+  title: string;
+  publisher: string;
+  link: string;
+  /** Unix seconds, ms, or ISO string from Yahoo. */
+  providerPublishTime?: number | string | Date | null;
+};
+
+function formatNewsDate(
+  value: CompanyNewsArticle["providerPublishTime"]
+): string | null {
+  if (value == null) return null;
+  let date: Date;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "number") {
+    // Yahoo may return seconds or ms
+    date = new Date(value > 1e12 ? value : value * 1000);
+  } else {
+    date = new Date(value);
+  }
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function RecentNewsPanel({ articles }: { articles: CompanyNewsArticle[] }) {
+  return (
+    <aside className="flex flex-col rounded-xl border border-slate-200 bg-white p-5">
+      <div className="mb-4">
+        <h3 className="text-base font-semibold tracking-tight text-slate-900">
+          Recent News
+        </h3>
+        <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+          Live headlines · Yahoo Finance
+        </p>
+      </div>
+
+      {articles.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-xs text-slate-500">
+          No recent headlines available for this ticker.
+        </p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {articles.map((article) => {
+            const published = formatNewsDate(article.providerPublishTime);
+            return (
+              <li key={article.uuid || article.link} className="py-3 first:pt-0 last:pb-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  {article.publisher}
+                  {published ? (
+                    <span className="font-normal normal-case tracking-normal text-slate-400">
+                      {" · "}
+                      {published}
+                    </span>
+                  ) : null}
+                </p>
+                <a
+                  href={article.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 block text-sm font-medium leading-snug text-slate-900 transition hover:text-blue-700"
+                >
+                  {article.title}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
 export default function CompanyTerminal({
   parent,
   initialInsight = null,
+  newsArticles = [],
 }: {
   parent: ParentCompany;
   initialInsight?: CompanyBrief | null;
+  newsArticles?: CompanyNewsArticle[];
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("5Y");
   /** Stock-only by default — user toggles child brands on deliberately. */
@@ -887,15 +973,16 @@ export default function CompanyTerminal({
   }, [baseChartData, studies, activeBrands]);
 
   const qtdYoYOverlayData = useMemo(() => {
+    // Toggle-aware: active brands only; if none toggled, sum ALL child brands.
     const brands =
-      chartBrandKeys.length > 0 ? chartBrandKeys : parent.childBrands;
+      activeBrands.length > 0 ? activeBrands : parent.childBrands;
     const nextEarnings =
       fundamentals?.nextEarnings && fundamentals.nextEarnings !== "N/A"
         ? fundamentals.nextEarnings
         : null;
     return buildQtdYoYOverlayData(trendRows, brands, nextEarnings);
   }, [
-    chartBrandKeys,
+    activeBrands,
     fundamentals?.nextEarnings,
     parent.childBrands,
     trendRows,
@@ -1259,55 +1346,59 @@ export default function CompanyTerminal({
           </div>
         </section>
 
-        <aside className="flex flex-col rounded-xl border border-slate-200 bg-white p-5">
-          <div className="mb-4">
-            <h3 className="text-base font-semibold tracking-tight text-slate-900">
-              Yahoo Facts
-            </h3>
-            <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-              Live fundamentals · ${parent.ticker}
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                P/E (Trailing)
-              </p>
-              <p className="mt-1 font-mono text-2xl font-semibold tabular-nums text-slate-900">
-                {peLabel}
-              </p>
-              {fundamentals?.forwardPE &&
-                fundamentals.forwardPE !== "N/A" &&
-                fundamentals.forwardPE !== peLabel && (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Forward {fundamentals.forwardPE}
-                  </p>
-                )}
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Next Earnings
-              </p>
-              <p className="mt-1 font-mono text-xl font-semibold tabular-nums text-slate-900">
-                {fundamentals?.nextEarnings ?? "—"}
+        <div className="flex flex-col gap-6">
+          <aside className="flex flex-col rounded-xl border border-slate-200 bg-white p-5">
+            <div className="mb-4">
+              <h3 className="text-base font-semibold tracking-tight text-slate-900">
+                Yahoo Facts
+              </h3>
+              <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                Live fundamentals · ${parent.ticker}
               </p>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Wall Street Consensus
-              </p>
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${wallStreetBadgeClass(streetConsensus)}`}
-              >
-                <Scale className="h-3 w-3 opacity-80" />
-                {formatWallStreetConsensus(streetConsensus)}
-              </span>
+            <div className="space-y-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  P/E (Trailing)
+                </p>
+                <p className="mt-1 font-mono text-2xl font-semibold tabular-nums text-slate-900">
+                  {peLabel}
+                </p>
+                {fundamentals?.forwardPE &&
+                  fundamentals.forwardPE !== "N/A" &&
+                  fundamentals.forwardPE !== peLabel && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Forward {fundamentals.forwardPE}
+                    </p>
+                  )}
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Next Earnings
+                </p>
+                <p className="mt-1 font-mono text-xl font-semibold tabular-nums text-slate-900">
+                  {fundamentals?.nextEarnings ?? "—"}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Wall Street Consensus
+                </p>
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${wallStreetBadgeClass(streetConsensus)}`}
+                >
+                  <Scale className="h-3 w-3 opacity-80" />
+                  {formatWallStreetConsensus(streetConsensus)}
+                </span>
+              </div>
             </div>
-          </div>
-        </aside>
+          </aside>
+
+          <RecentNewsPanel articles={newsArticles} />
+        </div>
       </div>
 
       {/* Middle row: QTD YoY overlay | Prediction / AI Explanation */}

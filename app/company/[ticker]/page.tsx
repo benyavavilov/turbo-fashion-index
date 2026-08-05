@@ -1,6 +1,9 @@
 import { notFound } from "next/navigation";
+import YahooFinance from "yahoo-finance2";
 
-import CompanyTerminal from "@/app/components/company-terminal";
+import CompanyTerminal, {
+  type CompanyNewsArticle,
+} from "@/app/components/company-terminal";
 import TerminalChrome from "@/app/components/terminal-chrome";
 import {
   selectBriefForTicker,
@@ -26,6 +29,8 @@ const ASSET_PROFILE_SELECT = [
   "momentum_pct",
   "terminal_verdict",
 ].join(",");
+
+const yahooFinance = new YahooFinance();
 
 export function generateStaticParams() {
   return listParentCompanies().map((p) => ({
@@ -60,6 +65,23 @@ async function loadCachedInsight(ticker: string): Promise<CompanyBrief | null> {
   return selectBriefForTicker(data as unknown as AiInsightRow[], ticker);
 }
 
+async function loadRecentNews(ticker: string): Promise<CompanyNewsArticle[]> {
+  try {
+    const searchResult = await yahooFinance.search(ticker);
+    const newsArticles = searchResult.news?.slice(0, 3) || [];
+    return newsArticles.map((article) => ({
+      uuid: String(article.uuid ?? article.link ?? article.title ?? ""),
+      title: String(article.title ?? "Untitled"),
+      publisher: String(article.publisher ?? "Yahoo Finance"),
+      link: String(article.link ?? "#"),
+      providerPublishTime: article.providerPublishTime ?? null,
+    }));
+  } catch (error) {
+    console.warn(`[company/${ticker}] news fetch failed:`, error);
+    return [];
+  }
+}
+
 export default async function CompanyPage({
   params,
 }: {
@@ -71,13 +93,20 @@ export default async function CompanyPage({
 
   if (!parent) notFound();
 
-  const insight = await loadCachedInsight(ticker);
+  const [insight, newsArticles] = await Promise.all([
+    loadCachedInsight(ticker),
+    loadRecentNews(ticker),
+  ]);
 
   return (
     <div className="min-h-screen bg-slate-50">
       <TerminalChrome subtitle={`${parent.name} · Earnings Whisper`} />
       <main className="mx-auto max-w-[1600px] p-6">
-        <CompanyTerminal parent={parent} initialInsight={insight} />
+        <CompanyTerminal
+          parent={parent}
+          initialInsight={insight}
+          newsArticles={newsArticles}
+        />
       </main>
     </div>
   );
