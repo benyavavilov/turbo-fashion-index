@@ -638,6 +638,53 @@ export async function runGenerateInsights(): Promise<GenerateInsightsResult> {
     }
   }
 
+  // Silent forward-test ledger — never block the primary insights write.
+  try {
+    const liveRows = rows.map((row) => {
+      const earningsRaw = row.next_earnings_date;
+      const earningsDate =
+        typeof earningsRaw === "string" && /^\d{4}-\d{2}-\d{2}/.test(earningsRaw)
+          ? earningsRaw.slice(0, 10)
+          : null;
+      const streetRaw =
+        typeof row.expected_revenue_growth === "string"
+          ? row.expected_revenue_growth
+          : "";
+      const wallStreetEstimate = parseGrowthPct(streetRaw);
+
+      return {
+        ticker: row.ticker,
+        brand: row.brand,
+        predicted_direction: row.earnings_mismatch,
+        earnings_date: earningsDate,
+        yoy_search_growth:
+          typeof row.momentum_pct === "number" &&
+          Number.isFinite(row.momentum_pct)
+            ? row.momentum_pct
+            : null,
+        wall_street_estimate: wallStreetEstimate,
+        actual_result: "PENDING",
+      };
+    });
+
+    const { error: liveError } = await getSupabase()
+      .from("live_predictions")
+      .insert(liveRows);
+
+    if (liveError) {
+      console.error(
+        `[live_predictions] insert failed (${liveRows.length} rows):`,
+        liveError.message
+      );
+    } else {
+      console.log(
+        `  Logged ${liveRows.length} forward-test rows → live_predictions`
+      );
+    }
+  } catch (liveCatch) {
+    console.error("[live_predictions] unexpected failure:", liveCatch);
+  }
+
   const elapsedSec = (Date.now() - startedAt) / 1000;
   console.log("\n=== Insight generation complete ===");
   console.log(`  Parents  : ${rows.length}`);

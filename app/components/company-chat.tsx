@@ -65,12 +65,13 @@ export default function CompanyChat({
     },
   });
 
-  const isBusy = status === "submitted" || status === "streaming";
+  // AI SDK v5+: status replaces legacy isLoading
+  const isLoading = status === "submitted" || status === "streaming";
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = input.trim();
-    if (!text || isBusy) return;
+    if (!text || isLoading) return;
     setInput("");
     setDisplayError(null);
     try {
@@ -99,7 +100,7 @@ export default function CompanyChat({
       </div>
 
       <div className="max-h-[220px] flex-1 space-y-2 overflow-y-auto px-4 py-3">
-        {messages.length === 0 && (
+        {messages.length === 0 && !isLoading && (
           <p className="text-xs leading-relaxed text-slate-500">
             Ask why search spiked, what drove a drawdown, or how child-brand
             momentum maps to ${ticker}.
@@ -132,6 +133,32 @@ export default function CompanyChat({
             )}
           </div>
         ))}
+        {isLoading && (
+          <div className="flex items-center gap-2 text-sm text-slate-500 animate-pulse">
+            <svg
+              className="h-4 w-4 animate-spin text-blue-600"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            Gemini is analyzing...
+          </div>
+        )}
         {displayError && (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {displayError}
@@ -145,11 +172,12 @@ export default function CompanyChat({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={`Ask Gemini about $${ticker}…`}
-            className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-700 focus:bg-white"
+            disabled={isLoading}
+            className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-700 focus:bg-white disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={isBusy || !input.trim()}
+            disabled={isLoading || !input.trim()}
             className="rounded-lg bg-blue-700 px-3 py-2.5 text-white transition hover:bg-blue-800 disabled:opacity-40"
             aria-label="Send"
           >
